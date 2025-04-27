@@ -1,0 +1,18 @@
+[project]
+name = "mujoco-quadruped"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "gymnasium[mujoco]>=1.1.1",
+    "imageio[ffmpeg]>=2.37.0",
+    "matplotlib>=3.10.3",
+    "mujoco>=3.3.3",
+    "mujoco-python-viewer>=0.1.4",
+    "numpy>=2.3.0",
+    "scipy>=1.15.3",
+    "stable-baselines3>=2.6.0",
+    "torch>=2.7.1",
+    "torchvision>=0.22.1",
+    "wandb>=0.20.1",
+]
