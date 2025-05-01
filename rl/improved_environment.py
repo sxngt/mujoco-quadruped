@@ -37,6 +37,9 @@ class ImprovedGO2Env(gym.Env):
             shape=(self.n_actions,), dtype=np.float32
         )
         
+        # 현실적인 물리 설정
+        self._setup_realistic_physics()
+        
         # 관찰 공간 개선: 이전 액션 + 관절 이력 포함
         n_joints = self.model.nq - 7
         n_velocities = self.model.nv - 6
@@ -66,9 +69,9 @@ class ImprovedGO2Env(gym.Env):
         self.prev_action = np.zeros(self.n_actions)
         self.action_smoothing_alpha = 0.7  # 스무싱 강도
         
-        # PD 제어기 게인
-        self.kp = 20.0  # Proportional gain
-        self.kd = 0.5   # Derivative gain
+        # PD 제어기 게인 (현실적인 물리를 위한 조정)
+        self.kp = 80.0  # Proportional gain (더 강하게)
+        self.kd = 2.0   # Derivative gain (더 강하게)
         
         # 발 접촉 추적
         self.foot_geom_ids = []
@@ -79,23 +82,24 @@ class ImprovedGO2Env(gym.Env):
         self.foot_contact_history = {i: deque(maxlen=50) for i in range(4)}
         self.last_contact_state = np.zeros(4, dtype=bool)
         
-        # 보상 함수 가중치 (모듈화)
+        # 보상 함수 가중치 (현실적인 물리를 위한 조정)
         self.reward_weights = {
-            'forward_velocity': 20.0,
-            'survival': 1.0,
-            'orientation': 2.0,
-            'base_height': 5.0,
-            'feet_air_time': 2.0,
-            'action_smoothness': 0.05,
-            'energy': 0.001,
-            'lateral_velocity': -4.0,
-            'angular_velocity': -0.5,
-            'joint_acceleration': -2.5e-4,
-            'feet_stumble': -2.0,
-            'joint_limits': -5.0,
+            'forward_velocity': 15.0,  # 전진 보상 약간 감소
+            'survival': 2.0,           # 생존 보상 증가
+            'orientation': 5.0,        # 자세 유지 중요도 증가
+            'base_height': 8.0,        # 높이 유지 중요도 증가
+            'feet_air_time': 1.0,      # 발 공중시간 보상 감소 (더 현실적)
+            'action_smoothness': 0.1,  # 부드러운 움직임 중요도 증가
+            'energy': 0.002,           # 에너지 효율성 중요도 증가
+            'lateral_velocity': -6.0,  # 측면 이동 페널티 증가
+            'angular_velocity': -1.0,  # 회전 페널티 증가
+            'joint_acceleration': -5e-4, # 관절 가속도 페널티 증가
+            'feet_stumble': -3.0,      # 발 걸림 페널티 증가
+            'joint_limits': -8.0,      # 관절 한계 페널티 증가
+            'gravity_compensation': 3.0, # 중력 보상 추가
         }
         
-        self.max_episode_steps = 1000
+        self.max_episode_steps = 5000  # 더 긴 에피소드 (원래 1000)
         self.current_step = 0
         self.dt = self.model.opt.timestep
         
@@ -138,6 +142,9 @@ class ImprovedGO2Env(gym.Env):
         
         # 시뮬레이션 전진
         mj.mj_forward(self.model, self.data)
+        
+        # 현실적인 물리 설정 적용
+        self._apply_physics_settings()
         
         # 상태 초기화
         self.current_step = 0
@@ -234,9 +241,9 @@ class ImprovedGO2Env(gym.Env):
         joint_mid = (joint_ranges[:, 0] + joint_ranges[:, 1]) / 2
         joint_span = (joint_ranges[:, 1] - joint_ranges[:, 0]) / 2
         
-        # 현재 관절 위치 기준 상대적 변화
+        # 현재 관절 위치 기준 상대적 변화 (더 현실적인 스케일링)
         current_joint_pos = self.data.qpos[7:7+self.n_actions]
-        target_joint_pos = current_joint_pos + smoothed_action * 0.1  # 작은 델타
+        target_joint_pos = current_joint_pos + smoothed_action * 0.05  # 더 작은 델타로 안정성 향상
         
         # 관절 한계 내로 클리핑
         target_joint_pos = np.clip(target_joint_pos, joint_ranges[:, 0], joint_ranges[:, 1])
@@ -275,6 +282,30 @@ class ImprovedGO2Env(gym.Env):
         self.last_contact_state = current_contacts
         
         return observation, reward, terminated, truncated, reward_info
+    
+    def _setup_realistic_physics(self):
+        """현실적인 물리 시뮬레이션을 위한 설정"""
+        # 중력 설정 확인 (지구 중력: -9.81 m/s²)
+        if hasattr(self.model, 'opt') and hasattr(self.model.opt, 'gravity'):
+            self.model.opt.gravity[2] = -9.81
+        
+        # 시뮬레이션 시간 스텝 (더 작게 하여 안정성 향상)
+        if hasattr(self.model, 'opt') and hasattr(self.model.opt, 'timestep'):
+            self.model.opt.timestep = 0.001  # 1ms (기본값 0.002)
+        
+        # 솔버 설정 (현실적인 물리를 위한 조정)
+        if hasattr(self.model, 'opt'):
+            self.model.opt.iterations = 50  # 더 많은 반복으로 정확도 향상
+            self.model.opt.ls_iterations = 10  # Line search 반복
+    
+    def _apply_physics_settings(self):
+        """매 에피소드마다 적용할 물리 설정"""
+        # 공기 저항 시뮬레이션 (선택적)
+        # self.data.qvel *= 0.999  # 미세한 공기 저항
+        
+        # 관절 마찰 설정
+        if hasattr(self.model, 'dof_frictionloss'):
+            self.model.dof_frictionloss[:] = 0.1  # 관절 마찰
     
     def _compute_modular_reward(self, action, current_contacts):
         """모듈화된 보상 함수"""
@@ -370,6 +401,13 @@ class ImprovedGO2Env(gym.Env):
                 joint_limit_penalty += 1
         rewards['joint_limits'] = joint_limit_penalty * self.reward_weights['joint_limits']
         
+        # 13. 중력 보상 (높이 유지 시 보상)
+        if self.data.qpos[2] > self.standing_height * 0.9:  # 목표 높이의 90% 이상
+            gravity_reward = 1.0
+        else:
+            gravity_reward = 0.0
+        rewards['gravity_compensation'] = gravity_reward * self.reward_weights['gravity_compensation']
+        
         # 총 보상 (오버플로우 방지)
         total_reward = sum(rewards.values())
         total_reward = np.clip(total_reward, -1000.0, 1000.0)  # 보상 클리핑
@@ -388,18 +426,50 @@ class ImprovedGO2Env(gym.Env):
         return self.data.cvel[foot_body * 6: foot_body * 6 + 3]
     
     def _is_terminated(self):
-        # 넘어짐 확인
-        if self.data.qpos[2] < 0.15:
+        # 실제 넘어짐만 감지 (더 관대한 조건)
+        
+        # 1. 극심한 낮은 높이 (완전히 바닥에 붙었을 때만)
+        if self.data.qpos[2] < 0.08:  # 8cm 이하 (원래 15cm)
+            print(f"에피소드 종료: 높이 너무 낮음 ({self.data.qpos[2]:.3f}m)")
             return True
         
-        # 과도한 기울어짐
+        # 2. 완전히 뒤집어졌을 때만 (더 관대하게)
         body_quat = self.data.qpos[3:7]
         z_axis = np.array([
             2*(body_quat[1]*body_quat[3] + body_quat[0]*body_quat[2]),
             2*(body_quat[2]*body_quat[3] - body_quat[0]*body_quat[1]),
             body_quat[0]**2 - body_quat[1]**2 - body_quat[2]**2 + body_quat[3]**2
         ])
-        if z_axis[2] < 0.5:  # 60도 이상 기울어짐
+        if z_axis[2] < -0.1:  # 완전히 뒤집어진 경우 (원래 0.5)
+            print(f"에피소드 종료: 완전히 뒤집어짐 (z_axis: {z_axis[2]:.3f})")
+            return True
+        
+        # 3. 극도로 빠른 회전 (회전하며 넘어지는 경우)
+        angular_speed = np.linalg.norm(self.data.qvel[3:6])
+        if angular_speed > 20.0:  # 매우 빠른 회전
+            print(f"에피소드 종료: 과도한 회전 속도 ({angular_speed:.3f} rad/s)")
+            return True
+        
+        # 4. 몸체와 바닥의 접촉 (몸체 기하체와 바닥이 닿은 경우)
+        body_contact = False
+        for i in range(self.data.ncon):
+            contact = self.data.contact[i]
+            # 몸체 관련 기하체 확인 (발이 아닌)
+            geom1_name = mj.mj_id2name(self.model, mj.mjtObj.mjOBJ_GEOM, contact.geom1) if contact.geom1 >= 0 else ""
+            geom2_name = mj.mj_id2name(self.model, mj.mjtObj.mjOBJ_GEOM, contact.geom2) if contact.geom2 >= 0 else ""
+            
+            # 몸체나 다리(발 제외)가 바닥에 닿으면 넘어진 것으로 판단
+            body_parts = ['torso', 'hip', 'thigh', 'calf']
+            for part in body_parts:
+                if (geom1_name and part in geom1_name) or (geom2_name and part in geom2_name):
+                    if 'foot' not in geom1_name and 'foot' not in geom2_name:  # 발이 아닌 경우
+                        body_contact = True
+                        break
+            if body_contact:
+                break
+        
+        if body_contact:
+            print(f"에피소드 종료: 몸체가 바닥에 접촉")
             return True
         
         return False
