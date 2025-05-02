@@ -266,15 +266,28 @@ class GO2ForwardEnv(gym.Env):
             if self.viewer is None:
                 import mujoco.viewer
                 self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
+                # 카메라 위치를 로봇 뒤쪽 위에서 관찰하도록 설정
+                self.viewer.cam.distance = 3.0  # 거리
+                self.viewer.cam.elevation = -20  # 각도 (위에서 아래로)
+                self.viewer.cam.azimuth = 180   # 방위각 (뒤에서 관찰)
+                self.viewer.cam.lookat[0] = 0   # x축 중심
+                self.viewer.cam.lookat[1] = 0   # y축 중심 
+                self.viewer.cam.lookat[2] = 0.3 # z축 중심 (로봇 높이)
+            else:
+                # 로봇을 따라다니는 카메라
+                robot_x = self.data.qpos[0]
+                robot_y = self.data.qpos[1]
+                self.viewer.cam.lookat[0] = robot_x
+                self.viewer.cam.lookat[1] = robot_y
             self.viewer.sync()
         elif self.render_mode == "rgb_array":
             if self.viewer is None:
-                self.viewer = mj.Renderer(self.model, width=640, height=480)
+                self.viewer = mj.Renderer(self.model, width=1024, height=768)
             self.viewer.update_scene(self.data)
             return self.viewer.render()
         elif self.render_mode == "depth_array":
             if self.viewer is None:
-                self.viewer = mj.Renderer(self.model, width=640, height=480)
+                self.viewer = mj.Renderer(self.model, width=1024, height=768)
             self.viewer.update_scene(self.data)
             return self.viewer.render(depth=True)
         return None
