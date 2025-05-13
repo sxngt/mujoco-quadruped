@@ -266,10 +266,10 @@ class GO2ForwardEnv(gym.Env):
             if self.viewer is None:
                 import mujoco.viewer
                 self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
-                # 카메라 위치를 로봇 뒤쪽 위에서 관찰하도록 설정
-                self.viewer.cam.distance = 3.0  # 거리
-                self.viewer.cam.elevation = -20  # 각도 (위에서 아래로)
-                self.viewer.cam.azimuth = 180   # 방위각 (뒤에서 관찰)
+                # 카메라 위치를 로봇 측후방에서 관찰하도록 설정
+                self.viewer.cam.distance = 3.5  # 거리
+                self.viewer.cam.elevation = -25  # 각도 (위에서 아래로)
+                self.viewer.cam.azimuth = 135   # 방위각 (측후방 45도)
                 self.viewer.cam.lookat[0] = 0   # x축 중심
                 self.viewer.cam.lookat[1] = 0   # y축 중심 
                 self.viewer.cam.lookat[2] = 0.3 # z축 중심 (로봇 높이)
