@@ -158,13 +158,35 @@ class GO2ForwardEnv(gym.Env):
                           body_quat[0]**2 - body_quat[1]**2 - body_quat[2]**2 + body_quat[3]**2])
         stability_reward = max(0, z_axis[2]) * 1.0  # 직립 보너스 (적당히)
         
+        # 6. 점프/호핑 방지 페널티
+        vertical_vel = abs(self.data.qvel[2])  # z축 속도
+        hop_penalty = -10.0 * max(0, vertical_vel - 0.15)  # 과도한 수직 움직임 페널티
+        
+        # 7. 다리 균형 사용 (앞뒤 다리 균등 사용)
+        if hasattr(self, 'current_action') and len(self.current_action) >= 12:
+            # 앞다리 토크 (FL, FR)
+            front_torques = np.abs(self.current_action[0:6])
+            # 뒷다리 토크 (RL, RR) 
+            rear_torques = np.abs(self.current_action[6:12])
+            # 뒷다리만 과도하게 사용하면 페널티
+            leg_imbalance = np.mean(rear_torques) - np.mean(front_torques)
+            leg_balance_penalty = -5.0 * max(0, leg_imbalance - 0.3)
+        else:
+            leg_balance_penalty = 0.0
+        
+        # 8. 부드러운 보행 보상 (지면 접촉 유지)
+        min_contact_reward = 2.0 if num_contacts >= 2 else -3.0
+        
         # === 총 보상 (전진이 압도적 비중) ===
         total_reward = (forward_reward +           # 최대 ~50+ (전진의 핵심)
                        survival_reward +          # ±50 (생존 필수)
                        direction_bonus +          # 0~2 (직진 보너스)
                        gait_reward +              # 0~3 (보행 패턴)
                        energy_penalty +           # 작은 페널티
-                       stability_reward)          # 0~1 (안정성)
+                       stability_reward +         # 0~1 (안정성)
+                       hop_penalty +              # 점프 방지
+                       leg_balance_penalty +      # 다리 균형 사용
+                       min_contact_reward)        # 지면 접촉 유지
         
         return total_reward, {
             'forward': forward_reward,
@@ -173,6 +195,9 @@ class GO2ForwardEnv(gym.Env):
             'gait': gait_reward,
             'energy': energy_penalty,
             'stability': stability_reward,
+            'hop_penalty': hop_penalty,
+            'leg_balance': leg_balance_penalty,
+            'contact': min_contact_reward,
             'total': total_reward
         }
     
