@@ -33,7 +33,7 @@ read -p "선택 (1-4): " mode
 case $mode in
     1)
         echo "⚡ 빠른 프로토타이핑 모드"
-        python train.py \
+        uv run python train.py \
             --mode train \
             --total_timesteps 3000000 \
             --rollout_length 4096 \
@@ -45,7 +45,7 @@ case $mode in
         ;;
     2)
         echo "🎯 표준 학습 모드"
-        python train.py \
+        uv run python train.py \
             --mode train \
             --total_timesteps 8000000 \
             --rollout_length 8192 \
@@ -57,7 +57,7 @@ case $mode in
         ;;
     3)
         echo "💎 정밀 학습 모드"
-        python train.py \
+        uv run python train.py \
             --mode train \
             --total_timesteps 20000000 \
             --rollout_length 16384 \
@@ -81,7 +81,7 @@ case $mode in
         batch=${batch:-512}
         lr=${lr:-5e-4}
         
-        python train.py \
+        uv run python train.py \
             --mode train \
             --total_timesteps $timesteps \
             --rollout_length 8192 \
@@ -96,4 +96,4 @@ esac
 echo "================================"
 echo "학습 완료!"
 echo "모델 평가를 실행하려면:"
-echo "python train.py --mode eval --render"
+echo "uv run python train.py --mode eval --render"
