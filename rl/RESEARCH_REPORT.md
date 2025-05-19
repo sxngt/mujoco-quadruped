@@ -184,4 +184,4 @@ self.viewer.cam.azimuth = 135       # 방위각 (측후방)
 ---
 
 *작성일: 2025년 6월 26일*  
-*작성자: Mujoco Quadruped 연구팀*
+*작성자: SClab 윤상현 연구원*

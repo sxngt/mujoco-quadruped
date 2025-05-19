@@ -2,6 +2,7 @@ import mujoco as mj
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
+from gait_generator import GaitGenerator, CyclicGaitReward
 
 
 class GO2ForwardEnv(gym.Env):
@@ -61,6 +62,11 @@ class GO2ForwardEnv(gym.Env):
         self.foot_geom_ids = []
         for name in ['FL_foot', 'FR_foot', 'RL_foot', 'RR_foot']:
             self.foot_geom_ids.append(mj.mj_name2id(self.model, mj.mjtObj.mjOBJ_GEOM, name))
+        
+        # Gait guidance system
+        self.gait_generator = GaitGenerator(gait_type="trot", frequency=1.5)
+        self.gait_reward_calculator = CyclicGaitReward(target_frequency=1.5)
+        self.simulation_time = 0.0
         
     def _get_observation(self):
         # Joint positions and velocities (excluding free joint)
@@ -177,7 +183,25 @@ class GO2ForwardEnv(gym.Env):
         # 8. 부드러운 보행 보상 (지면 접촉 유지)
         min_contact_reward = 2.0 if num_contacts >= 2 else -3.0
         
-        # === 총 보상 (전진이 압도적 비중) ===
+        # 9. 참조 동작 모방 보상 (핵심 추가!)
+        target_angles, target_contacts = self.gait_generator.get_joint_targets(self.simulation_time)
+        
+        # 관절 각도 유사성 보상
+        current_angles = self.data.qpos[7:19]  # 12개 관절
+        angle_diff = np.abs(current_angles - target_angles)
+        angle_similarity = np.exp(-angle_diff.mean() * 5.0) * 5.0  # 유사할수록 높은 보상
+        
+        # 발 접촉 패턴 유사성
+        current_contacts = [contact['in_contact'] for contact in contacts.values()]
+        contact_match = np.sum(np.array(current_contacts) == target_contacts)
+        contact_similarity = contact_match * 1.0  # 매칭되는 발당 1점
+        
+        # 주기적 보행 보상
+        gait_rhythm = self.gait_reward_calculator.compute_gait_reward(
+            np.array(current_contacts), dt=0.002
+        )
+        
+        # === 총 보상 (전진 + 올바른 걷기 패턴) ===
         total_reward = (forward_reward +           # 최대 ~50+ (전진의 핵심)
                        survival_reward +          # ±50 (생존 필수)
                        direction_bonus +          # 0~2 (직진 보너스)
@@ -186,7 +210,10 @@ class GO2ForwardEnv(gym.Env):
                        stability_reward +         # 0~1 (안정성)
                        hop_penalty +              # 점프 방지
                        leg_balance_penalty +      # 다리 균형 사용
-                       min_contact_reward)        # 지면 접촉 유지
+                       min_contact_reward +       # 지면 접촉 유지
+                       angle_similarity +         # 0~5 (참조 동작 모방)
+                       contact_similarity +       # 0~4 (발 접촉 패턴)
+                       gait_rhythm)               # 주기적 보행
         
         return total_reward, {
             'forward': forward_reward,
@@ -198,6 +225,9 @@ class GO2ForwardEnv(gym.Env):
             'hop_penalty': hop_penalty,
             'leg_balance': leg_balance_penalty,
             'contact': min_contact_reward,
+            'angle_imitation': angle_similarity,
+            'contact_imitation': contact_similarity,
+            'rhythm': gait_rhythm,
             'total': total_reward
         }
     
@@ -256,6 +286,7 @@ class GO2ForwardEnv(gym.Env):
         
         self.current_step = 0
         self.current_action = np.zeros(self.n_actions)
+        self.simulation_time = 0.0  # 시뮬레이션 시간 리셋
         
         # Set the robot properly on the ground
         mj.mj_forward(self.model, self.data)
@@ -281,6 +312,7 @@ class GO2ForwardEnv(gym.Env):
         truncated = self.current_step >= self.max_episode_steps
         
         self.current_step += 1
+        self.simulation_time += 0.002  # MuJoCo timestep
         
         info = {**reward_info, 'step': self.current_step, 'contacts': self._get_contact_info()}
         
