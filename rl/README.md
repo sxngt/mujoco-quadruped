@@ -138,10 +138,12 @@ uv run python test_gait.py
 - **메모리 최적화**: CUDA 환경 변수 및 배치 크기 최적화
 
 ## 실험 결과물
-- `models/`: 학습된 모델 체크포인트
-- `training_curves.png`: 학습 진행 시각화
-- `wandb/`: Weights & Biases 로그 데이터
+- `models/`: 학습된 모델 체크포인트 (로컬에만 저장, Git 추적 안함)
+- `training_curves.png`: 학습 진행 시각화 (로컬 생성)
+- `wandb/`: Weights & Biases 로그 데이터 (로컬 생성)
 - `RESEARCH_REPORT.md`: 구현 과정 연구 보고서
+
+> **참고**: 학습된 모델 파일들(`models/` 폴더)은 각 실행 환경별로 다르게 생성되므로 Git에서 제외됩니다. 학습 후 로컬 `rl/models/` 폴더에서 확인할 수 있습니다.
 
 ## 파일 구조
 ```
