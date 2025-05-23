@@ -81,6 +81,21 @@ uv run python demo.py --slow --episodes 3
 uv run python test_gait.py
 ```
 
+### 문제 해결
+
+#### 참조 gait로 인한 몸 비틀림 문제
+참조 gait를 사용할 때 로봇이 몸을 비틀거나 비정상적으로 움직인다면:
+
+```bash
+# 참조 gait 없이 기본 강화학습으로 훈련
+uv run python train.py --mode train --no_reference_gait
+
+# 또는 gait 디버깅으로 원인 분석
+uv run python debug_gait.py
+```
+
+**원인**: 참조 gait의 관절 각도가 실제 로봇 모델의 관절 범위와 맞지 않아서 발생합니다.
+
 ## 실험 설계
 
 ### 관찰 공간 (34차원)

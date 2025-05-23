@@ -12,7 +12,10 @@ from datetime import datetime
 
 def train_ppo(args):
     # Initialize environment
-    env = GO2ForwardEnv(render_mode="human" if args.render else None)
+    env = GO2ForwardEnv(
+        render_mode="human" if args.render else None,
+        use_reference_gait=not args.no_reference_gait
+    )
     
     # Initialize agent
     agent = PPOAgent(
@@ -229,6 +232,10 @@ def main():
                         help='Path to trained model for evaluation')
     parser.add_argument('--eval_episodes', type=int, default=10, 
                         help='Number of episodes for evaluation')
+    
+    # Reference gait arguments
+    parser.add_argument('--no_reference_gait', action='store_true', 
+                        help='Disable reference gait imitation learning')
     
     args = parser.parse_args()
     

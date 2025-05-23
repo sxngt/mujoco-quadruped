@@ -10,7 +10,7 @@ class GO2ForwardEnv(gym.Env):
     
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 50}
     
-    def __init__(self, render_mode=None):
+    def __init__(self, render_mode=None, use_reference_gait=True):
         self.model_path = "go2_scene.xml"  # Use our custom scene with ground
         
         self.model = mj.MjModel.from_xml_path(self.model_path)
@@ -63,9 +63,11 @@ class GO2ForwardEnv(gym.Env):
         for name in ['FL_foot', 'FR_foot', 'RL_foot', 'RR_foot']:
             self.foot_geom_ids.append(mj.mj_name2id(self.model, mj.mjtObj.mjOBJ_GEOM, name))
         
-        # Gait guidance system
-        self.gait_generator = GaitGenerator(gait_type="trot", frequency=1.5)
-        self.gait_reward_calculator = CyclicGaitReward(target_frequency=1.5)
+        # Gait guidance system (선택적)
+        self.use_reference_gait = use_reference_gait
+        if self.use_reference_gait:
+            self.gait_generator = GaitGenerator(gait_type="trot", frequency=1.5)
+            self.gait_reward_calculator = CyclicGaitReward(target_frequency=1.5)
         self.simulation_time = 0.0
         
     def _get_observation(self):
@@ -183,23 +185,29 @@ class GO2ForwardEnv(gym.Env):
         # 8. 부드러운 보행 보상 (지면 접촉 유지)
         min_contact_reward = 2.0 if num_contacts >= 2 else -3.0
         
-        # 9. 참조 동작 모방 보상 (핵심 추가!)
-        target_angles, target_contacts = self.gait_generator.get_joint_targets(self.simulation_time)
-        
-        # 관절 각도 유사성 보상
-        current_angles = self.data.qpos[7:19]  # 12개 관절
-        angle_diff = np.abs(current_angles - target_angles)
-        angle_similarity = np.exp(-angle_diff.mean() * 5.0) * 5.0  # 유사할수록 높은 보상
-        
-        # 발 접촉 패턴 유사성
-        current_contacts = [contact['in_contact'] for contact in contacts.values()]
-        contact_match = np.sum(np.array(current_contacts) == target_contacts)
-        contact_similarity = contact_match * 1.0  # 매칭되는 발당 1점
-        
-        # 주기적 보행 보상
-        gait_rhythm = self.gait_reward_calculator.compute_gait_reward(
-            np.array(current_contacts), dt=0.002
-        )
+        # 9. 참조 동작 모방 보상 (선택적)
+        if self.use_reference_gait:
+            target_angles, target_contacts = self.gait_generator.get_joint_targets(self.simulation_time)
+            
+            # 관절 각도 유사성 보상
+            current_angles = self.data.qpos[7:19]  # 12개 관절
+            angle_diff = np.abs(current_angles - target_angles)
+            angle_similarity = np.exp(-angle_diff.mean() * 5.0) * 5.0  # 유사할수록 높은 보상
+            
+            # 발 접촉 패턴 유사성
+            current_contacts = [contact['in_contact'] for contact in contacts.values()]
+            contact_match = np.sum(np.array(current_contacts) == target_contacts)
+            contact_similarity = contact_match * 1.0  # 매칭되는 발당 1점
+            
+            # 주기적 보행 보상
+            gait_rhythm = self.gait_reward_calculator.compute_gait_reward(
+                np.array(current_contacts), dt=0.002
+            )
+        else:
+            # 참조 보행 없이 기본 강화학습
+            angle_similarity = 0.0
+            contact_similarity = 0.0
+            gait_rhythm = 0.0
         
         # === 총 보상 (전진 + 올바른 걷기 패턴) ===
         total_reward = (forward_reward +           # 최대 ~50+ (전진의 핵심)
