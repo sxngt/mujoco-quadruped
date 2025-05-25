@@ -182,10 +182,41 @@ class GO2ForwardEnv(gym.Env):
         else:
             leg_balance_penalty = 0.0
         
-        # 8. 부드러운 보행 보상 (지면 접촉 유지)
+        # 8. 관절 안전성 페널티 (과도한 관절 굽힘 방지)
+        joint_angles = self.data.qpos[7:19]  # 12개 관절
+        joint_safety_penalty = 0.0
+        
+        # 각 관절의 허용 범위와 현재 각도 확인
+        for i in range(len(joint_angles)):
+            joint_idx = i + 1  # Free joint 다음부터
+            if joint_idx < self.model.njnt:
+                joint_range = self.model.jnt_range[joint_idx]
+                current_angle = joint_angles[i]
+                
+                # 관절 범위의 80% 이상 사용하면 페널티
+                range_center = (joint_range[0] + joint_range[1]) / 2
+                range_width = joint_range[1] - joint_range[0]
+                safe_range = range_width * 0.8
+                
+                # 안전 범위를 벗어난 정도에 따라 점진적 페널티
+                danger_threshold_low = joint_range[0] + 0.05 * range_width
+                danger_threshold_high = joint_range[1] - 0.05 * range_width
+                
+                if current_angle < danger_threshold_low:
+                    excess = abs(current_angle - danger_threshold_low)
+                    joint_safety_penalty += -2.0 * excess  # 완만한 페널티
+                elif current_angle > danger_threshold_high:
+                    excess = abs(current_angle - danger_threshold_high) 
+                    joint_safety_penalty += -2.0 * excess  # 완만한 페널티
+        
+        # 9. 급격한 관절 움직임 페널티 (부드러운 움직임 장려)
+        joint_velocities = self.data.qvel[6:18]  # 12개 관절 속도
+        violent_motion_penalty = -0.01 * np.sum(np.square(joint_velocities))  # 약한 페널티
+        
+        # 10. 부드러운 보행 보상 (지면 접촉 유지)
         min_contact_reward = 2.0 if num_contacts >= 2 else -3.0
         
-        # 9. 참조 동작 모방 보상 (선택적)
+        # 11. 참조 동작 모방 보상 (선택적)
         if self.use_reference_gait:
             target_angles, target_contacts = self.gait_generator.get_joint_targets(self.simulation_time)
             
@@ -209,7 +240,7 @@ class GO2ForwardEnv(gym.Env):
             contact_similarity = 0.0
             gait_rhythm = 0.0
         
-        # === 총 보상 (전진 + 올바른 걷기 패턴) ===
+        # === 총 보상 (전진 + 안전한 걷기 패턴) ===
         total_reward = (forward_reward +           # 최대 ~50+ (전진의 핵심)
                        survival_reward +          # ±50 (생존 필수)
                        direction_bonus +          # 0~2 (직진 보너스)
@@ -218,6 +249,8 @@ class GO2ForwardEnv(gym.Env):
                        stability_reward +         # 0~1 (안정성)
                        hop_penalty +              # 점프 방지
                        leg_balance_penalty +      # 다리 균형 사용
+                       joint_safety_penalty +     # 관절 안전성 (새로 추가)
+                       violent_motion_penalty +   # 급격한 움직임 방지 (새로 추가)
                        min_contact_reward +       # 지면 접촉 유지
                        angle_similarity +         # 0~5 (참조 동작 모방)
                        contact_similarity +       # 0~4 (발 접촉 패턴)
@@ -232,6 +265,8 @@ class GO2ForwardEnv(gym.Env):
             'stability': stability_reward,
             'hop_penalty': hop_penalty,
             'leg_balance': leg_balance_penalty,
+            'joint_safety': joint_safety_penalty,
+            'violent_motion': violent_motion_penalty,
             'contact': min_contact_reward,
             'angle_imitation': angle_similarity,
             'contact_imitation': contact_similarity,
