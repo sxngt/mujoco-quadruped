@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.12"
 dependencies = [
+    "cloudpickle>=3.1.1",
     "gymnasium[mujoco]>=1.1.1",
     "imageio[ffmpeg]>=2.37.0",
     "matplotlib>=3.10.3",

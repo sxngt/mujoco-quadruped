@@ -56,6 +56,18 @@ uv run mjpython train.py --mode train --lr 1e-4 --total_timesteps 2000000
 uv run python train.py --mode train --total_timesteps 10000000 --rollout_length 8192 --batch_size 512 --lr 5e-4 --ppo_epochs 15 --save_freq 100 --wandb
 ```
 
+### 벡터화 고속 학습 (추천!)
+```bash
+# 16개 환경 병렬 실행으로 최대 효율
+uv run python train_vectorized.py --num_envs 16 --total_timesteps 2000000 --no_reference_gait
+
+# 렌더링과 함께 (성능 약간 저하)
+uv run python train_vectorized.py --num_envs 8 --render --total_timesteps 1000000 --wandb
+
+# CPU 최적화 (경량)
+uv run python train_vectorized.py --num_envs 4 --total_timesteps 500000 --rollout_length 1024
+```
+
 ## 모델 평가
 
 ### 기본 평가
@@ -151,8 +163,9 @@ uv run python debug_gait.py
 - **관절 안전성**: 관절 한계 범위의 95% 이상 사용 시 페널티
 - **부드러운 움직임**: 급격한 관절 속도 변화 억제
 
-### GPU 최적화
-- **RTX 4080 최적화**: 대용량 배치 처리 및 텐서 코어 활용
+### 고성능 학습 시스템
+- **벡터화 환경**: 16개 환경 병렬 실행으로 2000+ FPS 달성
+- **RTX 4080 최적화**: 대용량 배치 처리 및 텐서 코어 활용  
 - **3가지 학습 모드**: 빠른 프로토타이핑 / 표준 학습 / 정밀 학습
 - **메모리 최적화**: CUDA 환경 변수 및 배치 크기 최적화
 
@@ -167,13 +180,16 @@ uv run python debug_gait.py
 ## 파일 구조
 ```
 rl/
-├── train.py              # 메인 훈련 스크립트
-├── environment.py        # GO2 환경 구현
-├── ppo_agent.py          # PPO 알고리즘 구현
-├── gait_generator.py     # 참조 보행 패턴 생성기
-├── demo.py               # 학습된 모델 데모
-├── test_gait.py          # 참조 패턴 시연
+├── train.py               # 메인 훈련 스크립트
+├── train_vectorized.py    # 벡터화 고속 학습 스크립트 (추천)
+├── environment.py         # GO2 환경 구현
+├── simple_vectorized.py   # 벡터화 환경 구현
+├── ppo_agent.py           # PPO 알고리즘 구현
+├── gait_generator.py      # 참조 보행 패턴 생성기
+├── demo.py                # 학습된 모델 데모
+├── test_gait.py           # 참조 패턴 시연
+├── debug_gait.py          # 보행 패턴 디버깅
 ├── gpu_optimized_train.sh # GPU 최적화 학습 스크립트
-├── go2_scene.xml         # 시뮬레이션 환경 설정
-└── RESEARCH_REPORT.md    # 연구 과정 보고서
+├── go2_scene.xml          # 시뮬레이션 환경 설정
+└── RESEARCH_REPORT.md     # 연구 과정 보고서
 ```

@@ -521,6 +521,7 @@ name = "mujoco-quadruped"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "cloudpickle" },
     { name = "gymnasium", extra = ["mujoco"] },
     { name = "imageio", extra = ["ffmpeg"] },
     { name = "matplotlib" },
@@ -536,6 +537,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cloudpickle", specifier = ">=3.1.1" },
     { name = "gymnasium", extras = ["mujoco"], specifier = ">=1.1.1" },
     { name = "imageio", extras = ["ffmpeg"], specifier = ">=2.37.0" },
     { name = "matplotlib", specifier = ">=3.10.3" },
