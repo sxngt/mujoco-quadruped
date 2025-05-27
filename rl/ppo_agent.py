@@ -55,11 +55,11 @@ class PolicyNetwork(nn.Module):
 
 class PPOAgent:
     def __init__(self, obs_dim, action_dim, lr=3e-4, gamma=0.99, gae_lambda=0.95,
-                 clip_ratio=0.2, value_coef=0.5, entropy_coef=0.01, max_grad_norm=0.5):
+                 clip_ratio=0.2, value_coef=0.5, entropy_coef=0.01, max_grad_norm=0.5, hidden_dim=256):
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        self.policy = PolicyNetwork(obs_dim, action_dim).to(self.device)
+        self.policy = PolicyNetwork(obs_dim, action_dim, hidden_dim).to(self.device)
         self.optimizer = optim.Adam(self.policy.parameters(), lr=lr)
         
         self.gamma = gamma
