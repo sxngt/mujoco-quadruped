@@ -44,7 +44,7 @@ class GPUMaxTrainer:
         
         # 혼합 정밀도 훈련 설정
         if args.mixed_precision:
-            self.scaler = torch.cuda.amp.GradScaler()
+            self.scaler = torch.amp.GradScaler('cuda')
             print("🔥 혼합 정밀도 훈련 활성화")
         else:
             self.scaler = None
@@ -86,9 +86,9 @@ class GPUMaxTrainer:
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
             
-            # 메모리 관리 최적화
+            # RTX 4080 메모리 관리 최적화 (16GB)
             torch.cuda.empty_cache()
-            os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:512,expandable_segments:True'
+            os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:1024,expandable_segments:True,garbage_collection_threshold:0.8'
             
             print(f"🔧 GPU 최적화 설정 완료")
             print(f"GPU: {torch.cuda.get_device_name()}")
@@ -113,7 +113,7 @@ class GPUMaxTrainer:
         
         # 몇 번의 forward/backward pass로 워밍업
         for _ in range(10):
-            with torch.cuda.amp.autocast(enabled=self.args.mixed_precision):
+            with torch.autocast(device_type='cuda', enabled=self.args.mixed_precision):
                 _ = self.agent.policy(dummy_obs)
             
         torch.cuda.synchronize()
@@ -125,7 +125,7 @@ class GPUMaxTrainer:
         obs_tensor = torch.FloatTensor(observations).to(self.agent.device, non_blocking=True)
         
         with torch.no_grad():
-            with torch.cuda.amp.autocast(enabled=self.args.mixed_precision):
+            with torch.autocast(device_type='cuda', enabled=self.args.mixed_precision):
                 actions, log_probs, values = self.agent.policy.get_action(obs_tensor)
         
         return actions.cpu().numpy(), log_probs.cpu().numpy(), values.cpu().numpy()
@@ -339,21 +339,21 @@ class GPUMaxTrainer:
 def main():
     parser = argparse.ArgumentParser(description='RTX 4080 GPU 최대 활용 학습')
     
-    # GPU 최적화 설정
-    parser.add_argument('--num_envs', type=int, default=64, 
-                        help='병렬 환경 수 (RTX 4080 기준 64개 추천)')
+    # RTX 4080 GPU 최적화 설정 (16GB VRAM)
+    parser.add_argument('--num_envs', type=int, default=96, 
+                        help='병렬 환경 수 (RTX 4080 16GB 기준 96개 최적화)')
     parser.add_argument('--mixed_precision', action='store_true', default=True,
                         help='혼합 정밀도 훈련 (메모리 절약 + 속도 향상)')
-    parser.add_argument('--hidden_dim', type=int, default=512,
-                        help='네트워크 히든 레이어 크기 (GPU 활용도 증가)')
+    parser.add_argument('--hidden_dim', type=int, default=768,
+                        help='네트워크 히든 레이어 크기 (RTX 4080 GPU 활용도 최대화)')
     
     # 대용량 학습 설정
     parser.add_argument('--total_timesteps', type=int, default=20000000,
                         help='총 학습 스텝 (2천만)')
-    parser.add_argument('--rollout_length', type=int, default=16384,
-                        help='롤아웃 길이 (대용량)')
-    parser.add_argument('--batch_size', type=int, default=2048,
-                        help='배치 크기 (GPU 메모리 최대 활용)')
+    parser.add_argument('--rollout_length', type=int, default=24576,
+                        help='롤아웃 길이 (RTX 4080 16GB 대용량 최적화)')
+    parser.add_argument('--batch_size', type=int, default=3072,
+                        help='배치 크기 (RTX 4080 16GB 메모리 최대 활용)')
     
     # PPO 하이퍼파라미터
     parser.add_argument('--lr', type=float, default=1e-4, help='학습률')
