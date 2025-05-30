@@ -111,9 +111,16 @@ class ImprovedTrainer:
             # 행동 생성
             actions, log_probs, values = self.get_vectorized_actions(observations)
             
+            # 행동 클리핑 (안전성)
+            actions = np.clip(actions, -1.0, 1.0)
+            
             # 환경 스텝
             next_observations, rewards, terminated, truncated, infos = self.vec_env.step(actions)
             dones = terminated | truncated
+            
+            # 보상 안정성 검사
+            rewards = np.clip(rewards, -100.0, 100.0)
+            rewards = np.where(np.isnan(rewards) | np.isinf(rewards), -10.0, rewards)
             
             # 에이전트에 전이 저장
             for env_idx in range(self.args.num_envs):
@@ -136,7 +143,8 @@ class ImprovedTrainer:
             current_episode_lengths += 1
             steps_collected += self.args.num_envs
             
-            # 에피소드 완료 처리
+            # 에피소드 완료 처리 (자동 리셋 없이)
+            reset_envs = []
             for env_idx in range(self.args.num_envs):
                 if dones[env_idx]:
                     self.episode_rewards[env_idx].append(current_episode_rewards[env_idx])
@@ -145,6 +153,13 @@ class ImprovedTrainer:
                     
                     current_episode_rewards[env_idx] = 0
                     current_episode_lengths[env_idx] = 0
+                    reset_envs.append(env_idx)
+                    
+                    print(f"환경 {env_idx} 에피소드 종료: 보상 {current_episode_rewards[env_idx]:.2f}, 길이 {current_episode_lengths[env_idx]}")
+            
+            # 필요시만 리셋 (벡터화 환경에서 자동 처리됨)
+            if len(reset_envs) > 0:
+                print(f"{len(reset_envs)}개 환경이 자동 리셋되었습니다.")
             
             # 렌더링
             if self.args.render and steps_collected % (self.args.num_envs * 10) == 0:

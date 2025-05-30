@@ -27,28 +27,62 @@ class PolicyNetwork(nn.Module):
     def forward(self, obs):
         features = self.shared(obs)
         
-        # Policy
+        # Policy (안정성 개선)
         mean = self.policy_mean(features)
-        std = torch.exp(self.policy_logstd)
+        mean = torch.clamp(mean, -5.0, 5.0)  # mean 클리핑
+        
+        # 로그 표준편차 클리핑 (-5 ~ 2 범위)
+        log_std = torch.clamp(self.policy_logstd, -5.0, 2.0)
+        std = torch.exp(log_std)
         
         # Value
         value = self.value(features)
+        value = torch.clamp(value, -1000.0, 1000.0)  # value 클리핑
         
         return mean, std, value
     
     def get_action(self, obs):
         mean, std, value = self.forward(obs)
+        
+        # 분포 안정성 검사
+        if torch.any(torch.isnan(mean)) or torch.any(torch.isnan(std)):
+            print("Warning: NaN detected in policy output")
+            mean = torch.zeros_like(mean)
+            std = torch.ones_like(std) * 0.1
+        
+        # 최소 표준편차 보장
+        std = torch.clamp(std, min=1e-6, max=2.0)
+        
         dist = Normal(mean, std)
         action = dist.sample()
+        action = torch.clamp(action, -1.0, 1.0)  # 액션 클리핑
+        
         log_prob = dist.log_prob(action).sum(dim=-1, keepdim=True)
+        log_prob = torch.clamp(log_prob, -20.0, 20.0)  # log_prob 클리핑
         
         return action, log_prob.squeeze(-1), value.squeeze(-1)
     
     def evaluate_actions(self, obs, actions):
         mean, std, value = self.forward(obs)
+        
+        # 분포 안정성 검사
+        if torch.any(torch.isnan(mean)) or torch.any(torch.isnan(std)):
+            print("Warning: NaN detected in policy evaluation")
+            mean = torch.zeros_like(mean)
+            std = torch.ones_like(std) * 0.1
+        
+        # 최소 표준편차 보장
+        std = torch.clamp(std, min=1e-6, max=2.0)
+        
+        # 액션 클리핑
+        actions = torch.clamp(actions, -1.0, 1.0)
+        
         dist = Normal(mean, std)
         log_prob = dist.log_prob(actions).sum(dim=-1, keepdim=True)
+        log_prob = torch.clamp(log_prob, -20.0, 20.0)
+        
         entropy = dist.entropy().sum(dim=-1, keepdim=True)
+        entropy = torch.clamp(entropy, -10.0, 10.0)
         
         return log_prob.squeeze(-1), entropy.squeeze(-1), value.squeeze(-1)
 
