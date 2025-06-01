@@ -298,41 +298,56 @@ class GO2ForwardEnv(gym.Env):
         }
     
     def _is_terminated(self):
-        """최대한 관대한 종료 조건 - 로봇이 충분히 보행을 시도할 수 있도록"""
+        """강제 전진 종료 조건 - 가만히 서있으면 무조건 종료!"""
         
         body_height = self.data.qpos[2]
         body_quat = self.data.qpos[3:7]  # [w, x, y, z]
         
-        # === 정말 극단적인 실패 상황에서만 종료 ===
+        # === 1. 가만히 서있으면 즉시 종료! (핵심) ===
+        if self.current_step > 50:  # 초기 50스텝 후부터
+            forward_vel = self.data.qvel[0]
+            total_vel = np.linalg.norm(self.data.qvel[:3])
+            
+            # 전진하지 않으면 즉시 종료
+            if abs(forward_vel) < 0.05 or total_vel < 0.1:
+                print(f"💀 종료: 움직이지 않음! (전진: {forward_vel:.3f}m/s)")
+                return True
         
-        # 1. 지면 아래로 뚫고 들어간 경우만
-        if body_height < -0.05:
-            print(f"⚠️ 에피소드 종료: 지면 아래로 침몰 {body_height:.3f}m")
+        # === 2. 일반 실패 상황 ===
+        
+        # 넘어진 경우
+        if body_height < 0.10:
+            print(f"💥 종료: 넘어짐 (높이: {body_height:.3f}m)")
             return True
             
-        # 2. 거의 완전히 뒤집힌 경우만
+        # 뒤집힌 경우
         z_axis = np.array([2*(body_quat[1]*body_quat[3] + body_quat[0]*body_quat[2]),
                           2*(body_quat[2]*body_quat[3] - body_quat[0]*body_quat[1]),
                           body_quat[0]**2 - body_quat[1]**2 - body_quat[2]**2 + body_quat[3]**2])
         
-        if z_axis[2] < -0.95:  # 거의 완전히 뒤집힌 경우만
-            print(f"⚠️ 에피소드 종료: 거의 완전 뒤집힘 (z_axis: {z_axis[2]:.3f})")
+        if z_axis[2] < 0.5:
+            print(f"🙃 종료: 뒤집힘 (z_axis: {z_axis[2]:.3f})")
             return True
         
-        # 3. 매우 먼 거리 이탈시만
-        if abs(self.data.qpos[1]) > 50.0:  # 좌우 50m
-            print(f"⚠️ 에피소드 종료: 매우 먼 거리 이탈 (y: {self.data.qpos[1]:.3f}m)")
+        # 옆으로 이탈
+        if abs(self.data.qpos[1]) > 10.0:
+            print(f"↔️ 종료: 옆으로 이탈 (y: {self.data.qpos[1]:.3f}m)")
             return True
         
-        # 4. 극도 후진시만  
-        if self.data.qpos[0] < -50.0:  # 뒤로 50m
-            print(f"⚠️ 에피소드 종료: 극도 후진 (x: {self.data.qpos[0]:.3f}m)")
+        # 후진
+        if self.data.qpos[0] < -5.0:
+            print(f"⬅️ 종료: 후진 (x: {self.data.qpos[0]:.3f}m)")
             return True
         
-        # 5. NaN/Inf 발생시만
+        # 성공 (10m 전진)
+        if self.data.qpos[0] > 10.0:
+            print(f"🏆 종료: 성공! 10m 전진 달성!")
+            return True
+        
+        # NaN/Inf
         if (np.any(np.isnan(self.data.qpos)) or np.any(np.isinf(self.data.qpos)) or
             np.any(np.isnan(self.data.qvel)) or np.any(np.isinf(self.data.qvel))):
-            print(f"⚠️ 에피소드 종료: 수치 불안정 (NaN/Inf 발생)")
+            print(f"❌ 종료: 수치 불안정")
             return True
             
         return False
