@@ -98,15 +98,23 @@ class GaitGenerator:
         for leg in ["FL", "FR", "RL", "RR"]:
             foot_pos, in_swing = self.get_foot_trajectory(leg, self.phase)
             
-            # 간단한 역기구학 (실제로는 더 복잡함)
-            # 여기서는 근사치 사용
+            # 강제 보행을 위한 역동적 관절 각도
             hip_angle = 0.0  # 고관절 (좌우)
-            thigh_angle = 0.3 if not in_swing else 0.5  # 대퇴부
-            calf_angle = -0.6 if not in_swing else -1.0  # 종아리
             
-            # 다리별 미세 조정
+            # 보행 중심 각도 (가만히 서있을 수 없게!)
+            if in_swing:
+                # 스윙 단계: 발을 높이 들어올림
+                thigh_angle = 0.8 + 0.3 * math.sin(self.phase * 2 * math.pi)  # 역동적 움직임
+                calf_angle = -1.6 - 0.4 * math.sin(self.phase * 2 * math.pi)  # 더 큰 굽힘
+            else:
+                # 지지 단계: 추진력 생성 
+                thigh_angle = 0.5 + 0.2 * math.cos(self.phase * 2 * math.pi)
+                calf_angle = -1.2 - 0.3 * math.cos(self.phase * 2 * math.pi)
+            
+            # 다리별 차별화 (더 역동적)
             if leg.startswith("R"):  # 뒷다리
-                thigh_angle += 0.1
+                thigh_angle += 0.2  # 더 강한 추진
+                calf_angle -= 0.2
                 
             joint_angles.extend([hip_angle, thigh_angle, calf_angle])
             foot_contacts.append(not in_swing)

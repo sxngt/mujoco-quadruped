@@ -158,8 +158,8 @@ class ImprovedGO2Env(gym.Env):
         # Gait guidance
         self.use_reference_gait = use_reference_gait
         if self.use_reference_gait:
-            self.gait_generator = GaitGenerator(gait_type="trot", frequency=1.5)
-            self.gait_reward_calculator = CyclicGaitReward(target_frequency=1.5)
+            self.gait_generator = GaitGenerator(gait_type="trot", frequency=3.0)  # 2배 빠르게!
+            self.gait_reward_calculator = CyclicGaitReward(target_frequency=3.0)
         self.simulation_time = 0.0
         
     def reset(self, seed=None):
@@ -299,6 +299,24 @@ class ImprovedGO2Env(gym.Env):
         return np.array(torques)
     
     def step(self, action):
+        # === GAIT 패턴 강제 적용! ===
+        if self.use_reference_gait:
+            # 현재 시간의 목표 관절 각도 (라디안)
+            target_angles, _ = self.gait_generator.get_joint_targets(self.simulation_time)
+            
+            # GAIT 패턴을 강하게 적용 (80% gait, 20% RL)
+            gait_influence = 0.8
+            
+            # 현재 관절 위치
+            current_joint_pos = self.data.qpos[7:7+self.n_actions]
+            
+            # Gait 목표와 현재 위치의 차이
+            gait_delta = (target_angles - current_joint_pos) * 5.0  # 빠르게 gait 따라가기
+            
+            # RL 액션과 혼합
+            mixed_action = gait_influence * gait_delta + (1 - gait_influence) * action
+            action = mixed_action
+        
         # 액션 스무싱
         if len(self.action_history) > 0:
             smoothed_action = (self.action_smoothing_alpha * action + 
@@ -313,9 +331,15 @@ class ImprovedGO2Env(gym.Env):
         joint_mid = (joint_ranges[:, 0] + joint_ranges[:, 1]) / 2
         joint_span = (joint_ranges[:, 1] - joint_ranges[:, 0]) / 2
         
-        # 현재 관절 위치 기준 상대적 변화 (매우 안전한 스케일링)
+        # 현재 관절 위치 기준 상대적 변화
         current_joint_pos = self.data.qpos[7:7+self.n_actions]
-        target_joint_pos = current_joint_pos + smoothed_action * 0.008  # 점프 방지를 위한 더 작은 델타
+        
+        if self.use_reference_gait:
+            # Gait 사용시 더 큰 움직임 허용
+            target_joint_pos = current_joint_pos + smoothed_action * 0.05
+        else:
+            # 일반 모드
+            target_joint_pos = current_joint_pos + smoothed_action * 0.008
         
         # 관절 한계 내로 클리핑
         target_joint_pos = np.clip(target_joint_pos, joint_ranges[:, 0], joint_ranges[:, 1])
@@ -447,8 +471,47 @@ class ImprovedGO2Env(gym.Env):
             self.model.dof_frictionloss[:] = 0.05  # 적당한 관절 마찰
     
     def _compute_modular_reward(self, action, current_contacts):
-        """연구 기반 재설계된 보상 함수"""
+        """Gait 패턴 강제 보상 함수 - 가만히 서있을 수 없게!"""
         rewards = {}
+        
+        # === 0. GAIT 패턴 강제! (가장 중요) ===
+        if self.use_reference_gait:
+            # 현재 시간에 맞는 목표 관절 각도 가져오기
+            target_angles, target_contacts = self.gait_generator.get_joint_targets(self.simulation_time)
+            
+            # 현재 관절 각도
+            current_angles = self.data.qpos[7:7+self.n_actions]
+            
+            # 각도 차이 계산
+            angle_diff = np.abs(current_angles - target_angles)
+            
+            # Gait 모방 보상 (매우 강력!)
+            gait_imitation_reward = 0.0
+            for i, diff in enumerate(angle_diff):
+                if diff < 0.1:  # 매우 가까움
+                    gait_imitation_reward += 10.0
+                elif diff < 0.3:  # 가까움
+                    gait_imitation_reward += 5.0
+                else:  # 멀음
+                    gait_imitation_reward -= 10.0  # 페널티!
+            
+            rewards['gait_imitation'] = gait_imitation_reward
+            
+            # 발 접촉 패턴 모방
+            current_contact_binary = [1 if c else 0 for c in current_contacts]
+            contact_match = sum(1 for i in range(4) if current_contact_binary[i] == target_contacts[i])
+            rewards['contact_pattern'] = contact_match * 5.0  # 각 발당 5점
+            
+            # Gait을 따르지 않으면 큰 페널티
+            avg_angle_error = np.mean(angle_diff)
+            if avg_angle_error > 0.5:  # 너무 벗어남
+                rewards['gait_deviation_penalty'] = -50.0
+            else:
+                rewards['gait_deviation_penalty'] = 0.0
+        else:
+            rewards['gait_imitation'] = 0.0
+            rewards['contact_pattern'] = 0.0
+            rewards['gait_deviation_penalty'] = 0.0
         
         # === 1. 핵심 목표: 전진 보상 (가장 중요) ===
         forward_vel = np.clip(self.data.qvel[0], -5.0, 5.0)

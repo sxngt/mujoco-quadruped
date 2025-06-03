@@ -337,8 +337,8 @@ def main():
     # 환경 설정
     parser.add_argument('--num_envs', type=int, default=64,
                         help='병렬 환경 수')
-    parser.add_argument('--no_reference_gait', action='store_true',
-                        help='참조 gait 비활성화')
+    parser.add_argument('--no_reference_gait', action='store_true', default=False,
+                        help='참조 gait 비활성화 (기본: gait 사용)')
     parser.add_argument('--render', action='store_true',
                         help='첫 번째 환경 렌더링')
     
