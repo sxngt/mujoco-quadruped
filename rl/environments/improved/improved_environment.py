@@ -388,11 +388,30 @@ class ImprovedGO2Env(gym.Env):
             print(f"   위치: x={self.data.qpos[0]:.2f}, y={self.data.qpos[1]:.2f}")
             print(f"   발 접촉: {sum(current_contacts)}/4")
         
-        # 매 100스텝마다 상태 정보 출력
+        # 매 100스텝마다 상세 상태 정보 출력
         if self.current_step % 100 == 0:
             body_height = self.data.qpos[2]
             forward_vel = self.data.qvel[0]
-            print(f"📊 스텝 {self.current_step}: 높이 {body_height:.3f}m, 전진속도 {forward_vel:.3f}m/s, 접촉 {sum(current_contacts)}/4")
+            total_vel = np.linalg.norm(self.data.qvel[:3])
+            
+            # Gait 활동 감지
+            if self.use_reference_gait:
+                joint_vel = self.data.qvel[6:6+self.n_actions]
+                gait_activity = np.linalg.norm(joint_vel)
+                is_gait_active = gait_activity > 1.0
+                
+                # z축 계산
+                body_quat = self.data.qpos[3:7]
+                z_axis = np.array([
+                    2*(body_quat[1]*body_quat[3] + body_quat[0]*body_quat[2]),
+                    2*(body_quat[2]*body_quat[3] - body_quat[0]*body_quat[1]),
+                    body_quat[0]**2 - body_quat[1]**2 - body_quat[2]**2 + body_quat[3]**2
+                ])[2]
+                
+                print(f"📊 스텝 {self.current_step}: 높이 {body_height:.3f}m, 전진 {forward_vel:.3f}m/s, 총속도 {total_vel:.3f}m/s")
+                print(f"   Gait활동: {gait_activity:.3f} ({'활성' if is_gait_active else '비활성'}), z축: {z_axis:.3f}, 접촉: {sum(current_contacts)}/4")
+            else:
+                print(f"📊 스텝 {self.current_step}: 높이 {body_height:.3f}m, 전진 {forward_vel:.3f}m/s, 총속도 {total_vel:.3f}m/s, 접촉 {sum(current_contacts)}/4")
         
         # 렌더링
         if self.render_mode == "human":
@@ -678,36 +697,56 @@ class ImprovedGO2Env(gym.Env):
         return self.data.cvel[foot_body * 6: foot_body * 6 + 3]
     
     def _is_terminated(self):
-        """강제 전진 종료 조건 - 가만히 서있으면 무조건 종료!"""
+        """보행 시도 중에는 관대한 종료 조건"""
         
         body_height = self.data.qpos[2]
         body_quat = self.data.qpos[3:7]
         
-        # === 1. 가만히 서있으면 즉시 종료! (가장 중요) ===
-        if self.current_step > 50:  # 초기 50스텝 후부터 체크
-            total_vel = np.linalg.norm(self.data.qvel[:3])  # 전체 속도
-            forward_vel = self.data.qvel[0]  # 전진 속도
+        # === 1. Gait 활동 감지 ===
+        gait_activity = 0.0
+        if self.use_reference_gait and self.current_step > 10:
+            # 관절 움직임 감지 (관절 속도의 합)
+            joint_vel = self.data.qvel[6:6+self.n_actions]
+            gait_activity = np.linalg.norm(joint_vel)
+        
+        # Gait이 활발하면 더 관대한 조건 적용 (임계값 완화)
+        is_gait_active = gait_activity > 0.3  # 임계값 낮춤: 1.0 → 0.3
+        
+        # === 2. 정지 체크 (Gait 활동 고려) ===
+        if self.current_step > 200:  # 더 많은 시간 허용 (100→200)
+            total_vel = np.linalg.norm(self.data.qvel[:3])
+            forward_vel = self.data.qvel[0]
             
-            # 정지 또는 너무 느리면 즉시 종료
-            if total_vel < 0.1 or abs(forward_vel) < 0.05:
-                print(f"💀 에피소드 종료: 움직이지 않음! (총속도: {total_vel:.3f}, 전진: {forward_vel:.3f})")
-                return True
+            if is_gait_active:
+                # Gait 활동 중에는 매우 관대 - 관절이 움직이면 거의 종료하지 않음
+                vel_threshold = 0.005  # 극도로 낮은 임계값 (0.02 → 0.005)
+                if total_vel < vel_threshold and gait_activity < 0.1:  # 0.5 → 0.1
+                    print(f"💀 종료: Gait 중 완전 정지 (속도: {total_vel:.3f}, gait: {gait_activity:.3f})")
+                    return True
+            else:
+                # Gait 비활성시도 더 관대하게
+                if total_vel < 0.02 or abs(forward_vel) < 0.01:  # 0.05→0.02, 0.02→0.01
+                    print(f"💀 종료: 움직이지 않음 (속도: {total_vel:.3f}, 전진: {forward_vel:.3f})")
+                    return True
         
-        # === 2. 실패 상황들 ===
+        # === 3. 실패 상황들 (Gait 고려하여 완화) ===
         
-        # 2-1. 넘어진 경우
-        if body_height < 0.10:  # 10cm 이하
-            print(f"💥 에피소드 종료: 넘어짐 (높이: {body_height:.3f}m)")
+        # 3-1. 높이 체크 (보행 중 매우 관대)
+        height_threshold = 0.02 if is_gait_active else 0.05  # Gait 중에는 2cm까지 허용 (5cm→2cm)
+        if body_height < height_threshold:
+            print(f"💥 종료: 넘어짐 (높이: {body_height:.3f}m, gait활성: {is_gait_active})")
             return True
         
-        # 2-2. 뒤집힌 경우
+        # 3-2. 기울기 체크 (보행 중 매우 관대)
         z_axis = np.array([
             2*(body_quat[1]*body_quat[3] + body_quat[0]*body_quat[2]),
             2*(body_quat[2]*body_quat[3] - body_quat[0]*body_quat[1]),
             body_quat[0]**2 - body_quat[1]**2 - body_quat[2]**2 + body_quat[3]**2
         ])
-        if z_axis[2] < 0.5:  # 많이 기울어진 경우
-            print(f"🙃 에피소드 종료: 뒤집힘 (z_axis: {z_axis[2]:.3f})")
+        
+        tilt_threshold = 0.0 if is_gait_active else 0.2  # Gait 중에는 완전히 뒤집힐 때만 종료 (0.2→0.0)
+        if z_axis[2] < tilt_threshold:
+            print(f"🙃 종료: 뒤집힘 (z_axis: {z_axis[2]:.3f}, gait활성: {is_gait_active})")
             return True
         
         # 2-3. 너무 멀리 간 경우

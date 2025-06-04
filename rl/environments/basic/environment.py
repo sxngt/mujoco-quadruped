@@ -303,30 +303,43 @@ class GO2ForwardEnv(gym.Env):
         body_height = self.data.qpos[2]
         body_quat = self.data.qpos[3:7]  # [w, x, y, z]
         
-        # === 1. 가만히 서있으면 즉시 종료! (핵심) ===
-        if self.current_step > 50:  # 초기 50스텝 후부터
+        # === 1. 관절 활동 감지 ===
+        joint_vel = self.data.qvel[6:6+12]  # 12개 관절 속도
+        joint_activity = np.linalg.norm(joint_vel)
+        is_trying_to_move = joint_activity > 0.5  # 관절이 움직이고 있으면
+        
+        # === 2. 정지 체크 (관절 활동 고려) ===
+        if self.current_step > 100:  # 더 많은 시간 허용
             forward_vel = self.data.qvel[0]
             total_vel = np.linalg.norm(self.data.qvel[:3])
             
-            # 전진하지 않으면 즉시 종료
-            if abs(forward_vel) < 0.05 or total_vel < 0.1:
-                print(f"💀 종료: 움직이지 않음! (전진: {forward_vel:.3f}m/s)")
-                return True
+            if is_trying_to_move:
+                # 관절이 움직이고 있으면 매우 관대
+                if total_vel < 0.01 and joint_activity < 0.2:
+                    print(f"💀 종료: 완전 정지 (속도: {total_vel:.3f}, 관절: {joint_activity:.3f})")
+                    return True
+            else:
+                # 관절도 안 움직이면 원래 조건
+                if abs(forward_vel) < 0.02 or total_vel < 0.05:
+                    print(f"💀 종료: 움직이지 않음 (전진: {forward_vel:.3f}, 총: {total_vel:.3f})")
+                    return True
         
-        # === 2. 일반 실패 상황 ===
+        # === 3. 실패 상황 (움직임 시도 고려) ===
         
-        # 넘어진 경우
-        if body_height < 0.10:
-            print(f"💥 종료: 넘어짐 (높이: {body_height:.3f}m)")
+        # 높이 체크 (움직이려고 하면 매우 관대)
+        height_threshold = 0.02 if is_trying_to_move else 0.05  # 0.05→0.02, 0.08→0.05
+        if body_height < height_threshold:
+            print(f"💥 종료: 넘어짐 (높이: {body_height:.3f}m, 시도중: {is_trying_to_move})")
             return True
             
-        # 뒤집힌 경우
+        # 기울기 체크 (움직이려고 하면 매우 관대)
         z_axis = np.array([2*(body_quat[1]*body_quat[3] + body_quat[0]*body_quat[2]),
                           2*(body_quat[2]*body_quat[3] - body_quat[0]*body_quat[1]),
                           body_quat[0]**2 - body_quat[1]**2 - body_quat[2]**2 + body_quat[3]**2])
         
-        if z_axis[2] < 0.5:
-            print(f"🙃 종료: 뒤집힘 (z_axis: {z_axis[2]:.3f})")
+        tilt_threshold = 0.0 if is_trying_to_move else 0.2  # 0.2→0.0, 0.4→0.2
+        if z_axis[2] < tilt_threshold:
+            print(f"🙃 종료: 뒤집힘 (z_axis: {z_axis[2]:.3f}, 시도중: {is_trying_to_move})")
             return True
         
         # 옆으로 이탈
