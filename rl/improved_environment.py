@@ -70,8 +70,8 @@ class ImprovedGO2Env(gym.Env):
         self.action_smoothing_alpha = 0.7  # 스무싱 강도
         
         # PD 제어기 게인 (현실적인 물리를 위한 조정)
-        self.kp = 80.0  # Proportional gain (더 강하게)
-        self.kd = 2.0   # Derivative gain (더 강하게)
+        self.kp = 30.0  # Proportional gain (현실적으로 감소)
+        self.kd = 0.8   # Derivative gain (현실적으로 감소)
         
         # 발 접촉 추적
         self.foot_geom_ids = []
@@ -209,20 +209,21 @@ class ImprovedGO2Env(gym.Env):
         ])
     
     def _compute_pd_torque(self, target_pos, current_pos, current_vel):
-        """PD 제어기로 토크 계산 (오버플로우 방지)"""
-        # 입력값 클리핑
-        target_pos = np.clip(target_pos, -10.0, 10.0)
-        current_pos = np.clip(current_pos, -10.0, 10.0)
-        current_vel = np.clip(current_vel, -100.0, 100.0)
+        """PD 제어기로 토크 계산 (현실적인 토크 제한)"""
+        # 입력값 클리핑 (더 작은 범위)
+        target_pos = np.clip(target_pos, -3.0, 3.0)
+        current_pos = np.clip(current_pos, -3.0, 3.0)
+        current_vel = np.clip(current_vel, -30.0, 30.0)
         
         pos_error = target_pos - current_pos
-        pos_error = np.clip(pos_error, -5.0, 5.0)  # 위치 오차 제한
+        pos_error = np.clip(pos_error, -0.5, 0.5)  # 더 작은 오차 제한
         
         torque = self.kp * pos_error - self.kd * current_vel
         
-        # 토크 한계 확인
+        # 토크 한계 더 엄격하게 (현실적인 값)
         max_torque = np.abs(self.model.actuator_forcerange[:, 1])
-        max_torque = np.where(max_torque > 0, max_torque, 50.0)  # 기본값 50Nm
+        max_torque = np.where(max_torque > 0, max_torque, 15.0)  # 기본값 15Nm
+        max_torque = np.minimum(max_torque, 25.0)  # 최대 25Nm로 제한
         
         return np.clip(torque, -max_torque, max_torque)
     
@@ -241,9 +242,9 @@ class ImprovedGO2Env(gym.Env):
         joint_mid = (joint_ranges[:, 0] + joint_ranges[:, 1]) / 2
         joint_span = (joint_ranges[:, 1] - joint_ranges[:, 0]) / 2
         
-        # 현재 관절 위치 기준 상대적 변화 (더 현실적인 스케일링)
+        # 현재 관절 위치 기준 상대적 변화 (더 작은 스케일링)
         current_joint_pos = self.data.qpos[7:7+self.n_actions]
-        target_joint_pos = current_joint_pos + smoothed_action * 0.05  # 더 작은 델타로 안정성 향상
+        target_joint_pos = current_joint_pos + smoothed_action * 0.02  # 더더 작은 델타
         
         # 관절 한계 내로 클리핑
         target_joint_pos = np.clip(target_joint_pos, joint_ranges[:, 0], joint_ranges[:, 1])
@@ -284,28 +285,72 @@ class ImprovedGO2Env(gym.Env):
         return observation, reward, terminated, truncated, reward_info
     
     def _setup_realistic_physics(self):
-        """현실적인 물리 시뮬레이션을 위한 설정"""
+        """현실적인 물리 시뮬레이션과 시각적 설정"""
         # 중력 설정 확인 (지구 중력: -9.81 m/s²)
         if hasattr(self.model, 'opt') and hasattr(self.model.opt, 'gravity'):
             self.model.opt.gravity[2] = -9.81
         
-        # 시뮬레이션 시간 스텝 (더 작게 하여 안정성 향상)
+        # 시뮬레이션 시간 스텝 (기본값 사용)
         if hasattr(self.model, 'opt') and hasattr(self.model.opt, 'timestep'):
-            self.model.opt.timestep = 0.001  # 1ms (기본값 0.002)
+            self.model.opt.timestep = 0.002  # 기본값 유지
         
-        # 솔버 설정 (현실적인 물리를 위한 조정)
+        # 솔버 설정 (안정성 우선)
         if hasattr(self.model, 'opt'):
-            self.model.opt.iterations = 50  # 더 많은 반복으로 정확도 향상
-            self.model.opt.ls_iterations = 10  # Line search 반복
+            self.model.opt.iterations = 20  # 적당한 반복
+            self.model.opt.ls_iterations = 6   # 기본값
+        
+        # 접촉 설정 개선 (바닥 침투 방지)
+        if hasattr(self.model, 'opt'):
+            self.model.opt.tolerance = 1e-6      # 더 엄격한 허용오차
+            self.model.opt.impratio = 1.0        # 개선 비율
+        
+        # 바닥 접촉 물리 설정
+        self._setup_contact_physics()
+    
+    def _setup_contact_physics(self):
+        """바닥 접촉 물리 설정"""
+        # 바닥과 발의 접촉 파라미터 조정
+        for i in range(self.model.ngeom):
+            geom_name = mj.mj_id2name(self.model, mj.mjtObj.mjOBJ_GEOM, i)
+            if geom_name:
+                # 발 기하체에 대한 접촉 설정
+                if 'foot' in geom_name:
+                    # 발의 마찰 계수 증가
+                    if hasattr(self.model, 'geom_friction'):
+                        self.model.geom_friction[i, 0] = 1.0   # 마찰 계수
+                        self.model.geom_friction[i, 1] = 0.1   # 롤링 마찰
+                        self.model.geom_friction[i, 2] = 0.1   # 비틀림 마찰
+                    
+                    # 발의 반발력 설정
+                    if hasattr(self.model, 'geom_solimp'):
+                        self.model.geom_solimp[i, 0] = 0.9    # 반발 계수
+                        self.model.geom_solimp[i, 1] = 0.95   # 반발 안정성
+                    
+                    # 접촉 강성 설정
+                    if hasattr(self.model, 'geom_solref'):
+                        self.model.geom_solref[i, 0] = 0.01   # 시간 상수
+                        self.model.geom_solref[i, 1] = 1.0    # 댐핑 비율
+                
+                # 바닥 기하체에 대한 설정
+                elif 'ground' in geom_name or 'floor' in geom_name:
+                    if hasattr(self.model, 'geom_friction'):
+                        self.model.geom_friction[i, 0] = 1.2   # 바닥 마찰
     
     def _apply_physics_settings(self):
         """매 에피소드마다 적용할 물리 설정"""
-        # 공기 저항 시뮬레이션 (선택적)
-        # self.data.qvel *= 0.999  # 미세한 공기 저항
+        # 발의 위치가 바닥 아래로 가지 않도록 보정
+        foot_height_threshold = 0.02  # 2cm
+        
+        for i, foot_geom_id in enumerate(self.foot_geom_ids):
+            # 발의 현재 위치 확인
+            foot_pos = self.data.geom_xpos[foot_geom_id]
+            if foot_pos[2] < foot_height_threshold:  # z 좌표가 너무 낮으면
+                # 발을 살짝 위로 올려줌 (물리적으로 자연스럽게)
+                pass  # MuJoCo 내부 접촉 해결기에 맡김
         
         # 관절 마찰 설정
         if hasattr(self.model, 'dof_frictionloss'):
-            self.model.dof_frictionloss[:] = 0.1  # 관절 마찰
+            self.model.dof_frictionloss[:] = 0.05  # 적당한 관절 마찰
     
     def _compute_modular_reward(self, action, current_contacts):
         """모듈화된 보상 함수"""
@@ -481,6 +526,8 @@ class ImprovedGO2Env(gym.Env):
                 if self.viewer is None:
                     import mujoco.viewer
                     self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
+                    # 시각적 설정
+                    self._setup_viewer_visuals()
                 self.viewer.sync()
             except (AttributeError, ImportError):
                 try:
@@ -488,13 +535,27 @@ class ImprovedGO2Env(gym.Env):
                     import mujoco_viewer
                     if self.viewer is None:
                         self.viewer = mujoco_viewer.MujocoViewer(self.model, self.data)
+                        self._setup_viewer_visuals()
                     self.viewer.render()
                 except ImportError:
-                    # 기본 OpenGL 방식
                     print("Warning: No viewer available. Install mujoco-viewer: pip install mujoco-viewer")
         elif self.render_mode == "rgb_array":
-            # RGB 배열 반환 구현 (나중에 필요시)
             pass
+    
+    def _setup_viewer_visuals(self):
+        """뷰어 시각적 설정"""
+        if hasattr(self.viewer, 'opt'):
+            # 접촉력 표시
+            self.viewer.opt.flags[mj.mjtVisFlag.mjVIS_CONTACTPOINT] = True
+            self.viewer.opt.flags[mj.mjtVisFlag.mjVIS_CONTACTFORCE] = True
+            
+            # 관절 표시
+            self.viewer.opt.flags[mj.mjtVisFlag.mjVIS_JOINT] = True
+            
+            # 질량 중심 표시
+            self.viewer.opt.flags[mj.mjtVisFlag.mjVIS_COM] = True
+            
+        print("시각적 표시 활성화: 접촉점, 접촉력, 관절, 질량중심")
     
     def close(self):
         if self.viewer is not None:
