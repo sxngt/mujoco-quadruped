@@ -69,9 +69,27 @@ class ImprovedGO2Env(gym.Env):
         self.prev_action = np.zeros(self.n_actions)
         self.action_smoothing_alpha = 0.7  # 스무싱 강도
         
-        # PD 제어기 게인 (현실적인 물리를 위한 조정)
-        self.kp = 30.0  # Proportional gain (현실적으로 감소)
-        self.kd = 0.8   # Derivative gain (현실적으로 감소)
+        # 관절별 차별화된 PD 제어기 게인 (연구 기반)
+        # GO2 로봇의 실제 관절 유형: hip, thigh, calf
+        self.joint_types = ['hip', 'thigh', 'calf'] * 4  # 4개 다리
+        
+        self.kp_gains = {
+            'hip': 60.0,    # Hip 관절: 중간 강성
+            'thigh': 80.0,  # Thigh 관절: 높은 강성 (체중 지지)
+            'calf': 100.0   # Calf 관절: 최고 강성 (접촉 제어)
+        }
+        
+        self.kd_gains = {
+            'hip': 3.0,     # Hip 관절: 적당한 댓핑
+            'thigh': 4.0,   # Thigh 관절: 높은 댓핑
+            'calf': 5.0     # Calf 관절: 최고 댓핑
+        }
+        
+        self.torque_limits = {
+            'hip': 23.7,    # ±23.7 Nm (GO2 실제 스펙)
+            'thigh': 23.7,  # ±23.7 Nm
+            'calf': 35.0    # ±35.0 Nm (안전 마진)
+        }
         
         # 발 접촉 추적
         self.foot_geom_ids = []
@@ -82,22 +100,31 @@ class ImprovedGO2Env(gym.Env):
         self.foot_contact_history = {i: deque(maxlen=50) for i in range(4)}
         self.last_contact_state = np.zeros(4, dtype=bool)
         
-        # 보상 함수 가중치 (현실적인 물리를 위한 조정)
+        # 연구 기반 보상 함수 가중치 (전진 동기 강화)
         self.reward_weights = {
-            'forward_velocity': 15.0,  # 전진 보상 약간 감소
-            'survival': 2.0,           # 생존 보상 증가
-            'orientation': 5.0,        # 자세 유지 중요도 증가
-            'base_height': 8.0,        # 높이 유지 중요도 증가
-            'feet_air_time': 1.0,      # 발 공중시간 보상 감소 (더 현실적)
-            'action_smoothness': 0.1,  # 부드러운 움직임 중요도 증가
-            'energy': 0.002,           # 에너지 효율성 중요도 증가
-            'lateral_velocity': -6.0,  # 측면 이동 페널티 증가
-            'angular_velocity': -1.0,  # 회전 페널티 증가
-            'joint_acceleration': -5e-4, # 관절 가속도 페널티 증가
-            'feet_stumble': -3.0,      # 발 걸림 페널티 증가
-            'joint_limits': -8.0,      # 관절 한계 페널티 증가
-            'gravity_compensation': 3.0, # 중력 보상 추가
+            # === 핵심 목표 (전진) ===
+            'forward_velocity': 50.0,    # 전진 보상 대폭 강화
+            'target_velocity': 30.0,     # 목표 속도 추적 보상
+            
+            # === 보행 품질 ===
+            'gait_pattern': 15.0,        # 동적 보행 패턴 보상
+            'energy_efficiency': 8.0,    # 에너지 효율적 보행
+            
+            # === 자세 안정성 ===
+            'height_tracking': 10.0,     # 높이 유지 보상
+            'orientation': 8.0,          # 자세 유지 보상
+            
+            # === 방향 제어 ===
+            'direction_control': 5.0,    # 직진 보상
+            
+            # === 안전성 및 부드러움 ===
+            'action_smoothness': 0.1,    # 부드러운 움직임
+            'joint_safety': -10.0,       # 관절 안전성 페널티
+            'stability': 3.0,            # 전반적 안정성
         }
+        
+        # 목표 전진 속도 설정
+        self.target_forward_velocity = 0.8  # 0.8 m/s 목표
         
         self.max_episode_steps = 5000  # 더 긴 에피소드 (원래 1000)
         self.current_step = 0
@@ -209,23 +236,35 @@ class ImprovedGO2Env(gym.Env):
         ])
     
     def _compute_pd_torque(self, target_pos, current_pos, current_vel):
-        """PD 제어기로 토크 계산 (현실적인 토크 제한)"""
-        # 입력값 클리핑 (더 작은 범위)
-        target_pos = np.clip(target_pos, -3.0, 3.0)
-        current_pos = np.clip(current_pos, -3.0, 3.0)
-        current_vel = np.clip(current_vel, -30.0, 30.0)
+        """관절별 차별화된 PD 제어기 (연구 기반)"""
+        torques = []
         
-        pos_error = target_pos - current_pos
-        pos_error = np.clip(pos_error, -0.5, 0.5)  # 더 작은 오차 제한
+        for i in range(len(target_pos)):
+            joint_type = self.joint_types[i]
+            
+            # 관절별 PD 게인
+            kp = self.kp_gains[joint_type]
+            kd = self.kd_gains[joint_type]
+            
+            # 안전한 입력값 범위
+            target = np.clip(target_pos[i], -3.0, 3.0)
+            current = np.clip(current_pos[i], -3.0, 3.0)
+            velocity = np.clip(current_vel[i], -20.0, 20.0)
+            
+            # 오차 계산
+            pos_error = target - current
+            pos_error = np.clip(pos_error, -0.3, 0.3)  # 작은 오차로 안정성 향상
+            
+            # PD 제어 법칙
+            torque = kp * pos_error - kd * velocity
+            
+            # 관절별 토크 제한
+            max_torque = self.torque_limits[joint_type]
+            torque = np.clip(torque, -max_torque, max_torque)
+            
+            torques.append(torque)
         
-        torque = self.kp * pos_error - self.kd * current_vel
-        
-        # 토크 한계 더 엄격하게 (현실적인 값)
-        max_torque = np.abs(self.model.actuator_forcerange[:, 1])
-        max_torque = np.where(max_torque > 0, max_torque, 15.0)  # 기본값 15Nm
-        max_torque = np.minimum(max_torque, 25.0)  # 최대 25Nm로 제한
-        
-        return np.clip(torque, -max_torque, max_torque)
+        return np.array(torques)
     
     def step(self, action):
         # 액션 스무싱
@@ -242,9 +281,9 @@ class ImprovedGO2Env(gym.Env):
         joint_mid = (joint_ranges[:, 0] + joint_ranges[:, 1]) / 2
         joint_span = (joint_ranges[:, 1] - joint_ranges[:, 0]) / 2
         
-        # 현재 관절 위치 기준 상대적 변화 (더 작은 스케일링)
+        # 현재 관절 위치 기준 상대적 변화 (안전한 스케일링)
         current_joint_pos = self.data.qpos[7:7+self.n_actions]
-        target_joint_pos = current_joint_pos + smoothed_action * 0.02  # 더더 작은 델타
+        target_joint_pos = current_joint_pos + smoothed_action * 0.015  # 더 안전한 델타
         
         # 관절 한계 내로 클리핑
         target_joint_pos = np.clip(target_joint_pos, joint_ranges[:, 0], joint_ranges[:, 1])
@@ -353,105 +392,100 @@ class ImprovedGO2Env(gym.Env):
             self.model.dof_frictionloss[:] = 0.05  # 적당한 관절 마찰
     
     def _compute_modular_reward(self, action, current_contacts):
-        """모듈화된 보상 함수"""
+        """연구 기반 재설계된 보상 함수"""
         rewards = {}
         
-        # 1. 전진 속도 보상
-        forward_vel = np.clip(self.data.qvel[0], -10.0, 10.0)  # 속도 클리핑
-        rewards['forward_velocity'] = forward_vel * self.reward_weights['forward_velocity']
+        # === 1. 핵심 목표: 전진 보상 (가장 중요) ===
+        forward_vel = np.clip(self.data.qvel[0], -5.0, 5.0)
         
-        # 2. 생존 보상
-        rewards['survival'] = self.reward_weights['survival']
+        # 1-1. 기본 전진 보상 (속도에 비례)
+        if forward_vel > 0:
+            rewards['forward_velocity'] = forward_vel * self.reward_weights['forward_velocity']
+        else:
+            rewards['forward_velocity'] = forward_vel * self.reward_weights['forward_velocity'] * 2  # 후진 페널티 강화
         
-        # 3. 방향 유지 보상
+        # 1-2. 목표 속도 추적 보상 (0.8 m/s 목표)
+        vel_error = abs(forward_vel - self.target_forward_velocity)
+        target_bonus = np.exp(-3.0 * vel_error)  # 지수적 보상
+        rewards['target_velocity'] = target_bonus * self.reward_weights['target_velocity']
+        
+        # === 2. 보행 품질 ===
+        # 2-1. 동적 보행 패턴 보상
+        num_contacts = sum(1 for contact in current_contacts if contact)
+        
+        # 이상적인 보행: 2-3개 발 접촉
+        if 2 <= num_contacts <= 3:
+            gait_reward = 1.0  # 최고 보상
+        elif num_contacts == 1:
+            gait_reward = 0.6  # 한 발 접촉 (어려우나 가능)
+        elif num_contacts == 4:
+            gait_reward = 0.3  # 정적 보행 (낮은 보상)
+        else:  # 0개 (점프 상태)
+            gait_reward = -0.5  # 페널티
+        
+        rewards['gait_pattern'] = gait_reward * self.reward_weights['gait_pattern']
+        
+        # 2-2. 에너지 효율성 (낮은 토크 사용 보상)
+        torque_efficiency = max(0, 1.0 - np.mean(np.abs(self.current_action)) / 20.0)
+        rewards['energy_efficiency'] = torque_efficiency * self.reward_weights['energy_efficiency']
+        
+        # === 3. 자세 안정성 ===
+        # 3-1. 높이 추적
+        height_error = abs(self.data.qpos[2] - self.standing_height)
+        height_reward = max(0, 1.0 - height_error * 10.0)  # 높이 차이에 민감
+        rewards['height_tracking'] = height_reward * self.reward_weights['height_tracking']
+        
+        # 3-2. 자세 유지 (upright orientation)
         body_quat = self.data.qpos[3:7]
         z_axis = np.array([
             2*(body_quat[1]*body_quat[3] + body_quat[0]*body_quat[2]),
             2*(body_quat[2]*body_quat[3] - body_quat[0]*body_quat[1]),
             body_quat[0]**2 - body_quat[1]**2 - body_quat[2]**2 + body_quat[3]**2
         ])
-        orientation_error = 1.0 - z_axis[2]
-        rewards['orientation'] = -orientation_error * self.reward_weights['orientation']
+        upright_reward = max(0, z_axis[2])  # z축이 위를 향할수록 보상
+        rewards['orientation'] = upright_reward * self.reward_weights['orientation']
         
-        # 4. 기본 높이 유지
-        height_error = abs(self.data.qpos[2] - self.standing_height)
-        rewards['base_height'] = -height_error * self.reward_weights['base_height']
+        # === 4. 방향 제어 ===
+        # 직진 보상 (측면 속도 및 회전 최소화)
+        lateral_vel = abs(self.data.qvel[1])  # y축 속도
+        yaw_vel = abs(self.data.qvel[5])      # z축 회전 속도
         
-        # 5. 발 공중 시간 보상
-        air_time_reward = 0
-        for i in range(4):
-            if len(self.foot_contact_history[i]) > 10:
-                # 최근 10스텝 중 공중에 있던 비율
-                air_ratio = 1.0 - np.mean(list(self.foot_contact_history[i])[-10:])
-                if 0.2 < air_ratio < 0.8:  # 적절한 공중 시간
-                    air_time_reward += 0.25
-        rewards['feet_air_time'] = air_time_reward * self.reward_weights['feet_air_time']
+        direction_reward = max(0, 1.0 - lateral_vel) * 0.7 + max(0, 1.0 - yaw_vel) * 0.3
+        rewards['direction_control'] = direction_reward * self.reward_weights['direction_control']
         
-        # 6. 액션 부드러움
+        # === 5. 안전성 및 부드러움 ===
+        # 5-1. 액션 부드러움
         if len(self.action_history) > 1:
-            action_diff = np.clip(action - self.action_history[-2], -5.0, 5.0)  # 차이 클리핑
-            action_diff_norm = np.sum(np.square(action_diff))
-            action_diff_norm = np.clip(action_diff_norm, 0, 100)  # 결과 클리핑
-            rewards['action_smoothness'] = -action_diff_norm * self.reward_weights['action_smoothness']
+            action_diff = np.clip(action - self.action_history[-2], -2.0, 2.0)
+            smoothness = max(0, 1.0 - np.mean(np.abs(action_diff)))
+            rewards['action_smoothness'] = smoothness * self.reward_weights['action_smoothness']
         else:
             rewards['action_smoothness'] = 0
         
-        # 7. 에너지 효율성
-        clipped_action = np.clip(self.current_action, -100.0, 100.0)  # 토크 클리핑
-        energy = np.sum(np.square(clipped_action))
-        energy = np.clip(energy, 0, 10000)  # 에너지 클리핑
-        rewards['energy'] = -energy * self.reward_weights['energy']
-        
-        # 8. 측면 속도 페널티
-        lateral_vel = np.clip(abs(self.data.qvel[1]), 0, 10.0)  # 속도 클리핑
-        rewards['lateral_velocity'] = lateral_vel * self.reward_weights['lateral_velocity']
-        
-        # 9. 회전 속도 페널티
-        ang_vel_xy = self.data.qvel[3:5]
-        ang_vel_xy = np.clip(ang_vel_xy, -20.0, 20.0)  # 각속도 클리핑
-        ang_vel_norm = np.linalg.norm(ang_vel_xy)
-        rewards['angular_velocity'] = ang_vel_norm * self.reward_weights['angular_velocity']
-        
-        # 10. 관절 가속도 페널티
-        if hasattr(self, 'prev_joint_vel'):
-            current_vel = np.clip(self.data.qvel[6:6+self.n_actions], -50.0, 50.0)
-            prev_vel = np.clip(self.prev_joint_vel, -50.0, 50.0)
-            joint_acc = (current_vel - prev_vel) / max(self.dt, 1e-6)  # dt가 0인 경우 방지
-            joint_acc = np.clip(joint_acc, -1000.0, 1000.0)  # 가속도 클리핑
-            acc_penalty = np.sum(np.square(joint_acc))
-            acc_penalty = np.clip(acc_penalty, 0, 1000000)  # 페널티 클리핑
-            rewards['joint_acceleration'] = -acc_penalty * self.reward_weights['joint_acceleration']
-        else:
-            rewards['joint_acceleration'] = 0
-        self.prev_joint_vel = self.data.qvel[6:6+self.n_actions].copy()
-        
-        # 11. 발 걸림 페널티
-        stumble_penalty = 0
-        for i in range(4):
-            if current_contacts[i] and not self.last_contact_state[i]:
-                # 착지 시 수평 속도가 크면 페널티
-                foot_vel = self._get_foot_velocity(i)
-                foot_vel_clipped = np.clip(foot_vel[:2], -10.0, 10.0)
-                if np.linalg.norm(foot_vel_clipped) > 0.5:
-                    stumble_penalty += 1
-        rewards['feet_stumble'] = stumble_penalty * self.reward_weights['feet_stumble']
-        
-        # 12. 관절 한계 페널티
+        # 5-2. 관절 안전성 (관절 한계 및 과도한 사용 방지)
         joint_pos = self.data.qpos[7:7+self.n_actions]
-        joint_limit_penalty = 0
+        joint_safety_penalty = 0
+        
         for i in range(self.n_actions):
             range_span = self.joint_position_limits[i, 1] - self.joint_position_limits[i, 0]
             normalized_pos = (joint_pos[i] - self.joint_position_limits[i, 0]) / range_span
-            if normalized_pos < 0.1 or normalized_pos > 0.9:
-                joint_limit_penalty += 1
-        rewards['joint_limits'] = joint_limit_penalty * self.reward_weights['joint_limits']
+            if normalized_pos < 0.15 or normalized_pos > 0.85:  # 위험 영역
+                joint_safety_penalty += 1
         
-        # 13. 중력 보상 (높이 유지 시 보상)
-        if self.data.qpos[2] > self.standing_height * 0.9:  # 목표 높이의 90% 이상
-            gravity_reward = 1.0
-        else:
-            gravity_reward = 0.0
-        rewards['gravity_compensation'] = gravity_reward * self.reward_weights['gravity_compensation']
+        rewards['joint_safety'] = joint_safety_penalty * self.reward_weights['joint_safety']
+        
+        # 5-3. 전반적 안정성 (급격한 변화 최소화)
+        body_stability = 1.0
+        
+        # 수직 속도 안정성
+        vertical_vel = abs(self.data.qvel[2])
+        body_stability *= max(0, 1.0 - vertical_vel)
+        
+        # 각속도 안정성
+        total_ang_vel = np.linalg.norm(self.data.qvel[3:6])
+        body_stability *= max(0, 1.0 - total_ang_vel * 0.5)
+        
+        rewards['stability'] = body_stability * self.reward_weights['stability']
         
         # 총 보상 (오버플로우 방지)
         total_reward = sum(rewards.values())
@@ -471,50 +505,49 @@ class ImprovedGO2Env(gym.Env):
         return self.data.cvel[foot_body * 6: foot_body * 6 + 3]
     
     def _is_terminated(self):
-        # 실제 넘어짐만 감지 (더 관대한 조건)
+        """연구 기반 단계적 종료 조건"""
         
-        # 1. 극심한 낮은 높이 (완전히 바닥에 붙었을 때만)
-        if self.data.qpos[2] < 0.08:  # 8cm 이하 (원래 15cm)
-            print(f"에피소드 종료: 높이 너무 낮음 ({self.data.qpos[2]:.3f}m)")
+        body_height = self.data.qpos[2]
+        body_quat = self.data.qpos[3:7]
+        
+        # 1. 즉시 종료: 심각한 실패 상황
+        # 1-1. 극도로 낮은 높이 (완전히 바닥에 누움)
+        if body_height < 0.06:  # 6cm 이하 (매우 관대)
+            print(f"에피소드 종료: 높이 {body_height:.3f}m (너무 낮음)")
             return True
         
-        # 2. 완전히 뒤집어졌을 때만 (더 관대하게)
-        body_quat = self.data.qpos[3:7]
+        # 1-2. 완전히 뒤집어진 상태
         z_axis = np.array([
             2*(body_quat[1]*body_quat[3] + body_quat[0]*body_quat[2]),
             2*(body_quat[2]*body_quat[3] - body_quat[0]*body_quat[1]),
             body_quat[0]**2 - body_quat[1]**2 - body_quat[2]**2 + body_quat[3]**2
         ])
-        if z_axis[2] < -0.1:  # 완전히 뒤집어진 경우 (원래 0.5)
-            print(f"에피소드 종료: 완전히 뒤집어짐 (z_axis: {z_axis[2]:.3f})")
+        if z_axis[2] < 0.1:  # 거의 뒤집어진 상태
+            print(f"에피소드 종료: 뒤집어짐 (z_axis: {z_axis[2]:.3f})")
             return True
         
-        # 3. 극도로 빠른 회전 (회전하며 넘어지는 경우)
+        # 2. 학습 영역 벗어남 (무한히 굴러가는 것 방지)
+        if abs(self.data.qpos[1]) > 5.0:  # 좌우 5m
+            print(f"에피소드 종료: 학습 영역 벗어남 (y: {self.data.qpos[1]:.3f}m)")
+            return True
+        
+        if self.data.qpos[0] < -3.0:  # 뒤로 3m
+            print(f"에피소드 종료: 후진 한계 (x: {self.data.qpos[0]:.3f}m)")
+            return True
+        
+        # 3. 관절 안전성 (관절 파손 방지)
+        joint_pos = self.data.qpos[7:7+self.n_actions]
+        for i in range(self.n_actions):
+            if i + 1 < self.model.njnt:
+                joint_range = self.model.jnt_range[i + 1]
+                if joint_pos[i] <= joint_range[0] + 0.005 or joint_pos[i] >= joint_range[1] - 0.005:
+                    print(f"에피소드 종료: 관절 {i} 한계 근처 ({joint_pos[i]:.3f})")
+                    return True
+        
+        # 4. 과도한 회전 (제어 불가능한 상황)
         angular_speed = np.linalg.norm(self.data.qvel[3:6])
-        if angular_speed > 20.0:  # 매우 빠른 회전
-            print(f"에피소드 종료: 과도한 회전 속도 ({angular_speed:.3f} rad/s)")
-            return True
-        
-        # 4. 몸체와 바닥의 접촉 (몸체 기하체와 바닥이 닿은 경우)
-        body_contact = False
-        for i in range(self.data.ncon):
-            contact = self.data.contact[i]
-            # 몸체 관련 기하체 확인 (발이 아닌)
-            geom1_name = mj.mj_id2name(self.model, mj.mjtObj.mjOBJ_GEOM, contact.geom1) if contact.geom1 >= 0 else ""
-            geom2_name = mj.mj_id2name(self.model, mj.mjtObj.mjOBJ_GEOM, contact.geom2) if contact.geom2 >= 0 else ""
-            
-            # 몸체나 다리(발 제외)가 바닥에 닿으면 넘어진 것으로 판단
-            body_parts = ['torso', 'hip', 'thigh', 'calf']
-            for part in body_parts:
-                if (geom1_name and part in geom1_name) or (geom2_name and part in geom2_name):
-                    if 'foot' not in geom1_name and 'foot' not in geom2_name:  # 발이 아닌 경우
-                        body_contact = True
-                        break
-            if body_contact:
-                break
-        
-        if body_contact:
-            print(f"에피소드 종료: 몸체가 바닥에 접촉")
+        if angular_speed > 25.0:  # 매우 빠른 회전
+            print(f"에피소드 종료: 과도한 회전 ({angular_speed:.3f} rad/s)")
             return True
         
         return False
