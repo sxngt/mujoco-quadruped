@@ -100,33 +100,35 @@ class ImprovedGO2Env(gym.Env):
         self.foot_contact_history = {i: deque(maxlen=50) for i in range(4)}
         self.last_contact_state = np.zeros(4, dtype=bool)
         
-        # 연구 기반 보상 함수 가중치 (전진 동기 강화)
+        # 연구 기반 보상 함수 가중치 (점프 방지 및 보행 강화)
         self.reward_weights = {
             # === 핵심 목표 (전진) ===
-            'forward_velocity': 50.0,    # 전진 보상 대폭 강화
-            'target_velocity': 30.0,     # 목표 속도 추적 보상
+            'forward_velocity': 25.0,    # 전진 보상 (점프 방지를 위해 감소)
+            'target_velocity': 15.0,     # 목표 속도 추적 보상
             
-            # === 보행 품질 ===
-            'gait_pattern': 15.0,        # 동적 보행 패턴 보상
-            'energy_efficiency': 8.0,    # 에너지 효율적 보행
+            # === 보행 품질 (지상 접촉 강조) ===
+            'gait_pattern': 30.0,        # 보행 패턴 중요도 대폭 증가
+            'ground_contact': 1.0,       # 지상 접촉 유지 보상 (새로 추가)
+            'energy_efficiency': 5.0,    # 에너지 효율적 보행
             
             # === 자세 안정성 ===
-            'height_tracking': 10.0,     # 높이 유지 보상
-            'orientation': 8.0,          # 자세 유지 보상
+            'height_tracking': 20.0,     # 높이 유지 중요도 증가
+            'orientation': 15.0,         # 자세 유지 중요도 증가
             
             # === 방향 제어 ===
-            'direction_control': 5.0,    # 직진 보상
+            'direction_control': 10.0,   # 직진 보상 증가
             
             # === 안전성 및 부드러움 ===
-            'action_smoothness': 0.1,    # 부드러운 움직임
-            'joint_safety': -10.0,       # 관절 안전성 페널티
-            'stability': 3.0,            # 전반적 안정성
+            'action_smoothness': 0.5,    # 부드러운 움직임 증가
+            'joint_safety': -20.0,       # 관절 안전성 페널티 강화
+            'vertical_control': 3.0,     # 수직 움직임 제어 강화
+            'stability': 10.0,           # 전반적 안정성 대폭 증가
         }
         
         # 목표 전진 속도 설정
         self.target_forward_velocity = 0.8  # 0.8 m/s 목표
         
-        self.max_episode_steps = 5000  # 더 긴 에피소드 (원래 1000)
+        self.max_episode_steps = 8000  # 더 긴 에피소드로 보행 학습 기회 증가
         self.current_step = 0
         self.dt = self.model.opt.timestep
         
@@ -281,9 +283,9 @@ class ImprovedGO2Env(gym.Env):
         joint_mid = (joint_ranges[:, 0] + joint_ranges[:, 1]) / 2
         joint_span = (joint_ranges[:, 1] - joint_ranges[:, 0]) / 2
         
-        # 현재 관절 위치 기준 상대적 변화 (안전한 스케일링)
+        # 현재 관절 위치 기준 상대적 변화 (매우 안전한 스케일링)
         current_joint_pos = self.data.qpos[7:7+self.n_actions]
-        target_joint_pos = current_joint_pos + smoothed_action * 0.015  # 더 안전한 델타
+        target_joint_pos = current_joint_pos + smoothed_action * 0.008  # 점프 방지를 위한 더 작은 델타
         
         # 관절 한계 내로 클리핑
         target_joint_pos = np.clip(target_joint_pos, joint_ranges[:, 0], joint_ranges[:, 1])
@@ -409,24 +411,30 @@ class ImprovedGO2Env(gym.Env):
         target_bonus = np.exp(-3.0 * vel_error)  # 지수적 보상
         rewards['target_velocity'] = target_bonus * self.reward_weights['target_velocity']
         
-        # === 2. 보행 품질 ===
-        # 2-1. 동적 보행 패턴 보상
+        # === 2. 보행 품질 (지상 접촉 강조) ===
+        # 2-1. 지상 접촉 유지 보상 (점프 방지)
         num_contacts = sum(1 for contact in current_contacts if contact)
         
-        # 이상적인 보행: 2-3개 발 접촉
-        if 2 <= num_contacts <= 3:
-            gait_reward = 1.0  # 최고 보상
+        # 지상 접촉 강조: 항상 최소 1개 발은 땅에 닿아야 함
+        if num_contacts == 0:
+            gait_reward = -20.0  # 점프 매우 강한 페널티
         elif num_contacts == 1:
-            gait_reward = 0.6  # 한 발 접촉 (어려우나 가능)
-        elif num_contacts == 4:
-            gait_reward = 0.3  # 정적 보행 (낮은 보상)
-        else:  # 0개 (점프 상태)
-            gait_reward = -0.5  # 페널티
+            gait_reward = 0.3   # 한 발 접촉 (어려우나 허용)
+        elif num_contacts == 2:
+            gait_reward = 1.5   # 이상적 동적 보행 (강화)
+        elif num_contacts == 3:
+            gait_reward = 1.0   # 좋은 보행
+        else:  # 4개 모두 접촉
+            gait_reward = 2.0   # 정적 보행 (점프 방지를 위해 더 보상)
         
         rewards['gait_pattern'] = gait_reward * self.reward_weights['gait_pattern']
         
-        # 2-2. 에너지 효율성 (낮은 토크 사용 보상)
-        torque_efficiency = max(0, 1.0 - np.mean(np.abs(self.current_action)) / 20.0)
+        # 2-2. 지상 유지 보너스 (점프 방지)
+        ground_contact_bonus = min(num_contacts, 4) / 4.0  # 모든 발 접촉 장려
+        rewards['ground_contact'] = ground_contact_bonus * 15.0  # 지상 접촉 강화
+        
+        # 2-3. 에너지 효율성 (낮은 토크 사용 보상)
+        torque_efficiency = max(0, 1.0 - np.mean(np.abs(self.current_action)) / 15.0)
         rewards['energy_efficiency'] = torque_efficiency * self.reward_weights['energy_efficiency']
         
         # === 3. 자세 안정성 ===
@@ -474,18 +482,51 @@ class ImprovedGO2Env(gym.Env):
         
         rewards['joint_safety'] = joint_safety_penalty * self.reward_weights['joint_safety']
         
-        # 5-3. 전반적 안정성 (급격한 변화 최소화)
+        # 5-3. 수직 움직임 제어 (점프 방지)
+        vertical_vel = self.data.qvel[2]  # z축 속도
+        
+        # 위로 점프하는 것 매우 강하게 페널티
+        if vertical_vel > 0.1:  # 위로 0.1m/s 이상 (더 엄격)
+            jump_penalty = -50.0 * (vertical_vel - 0.1)  # 더 강한 페널티
+        else:
+            jump_penalty = 0.0
+        
+        # 급격한 낙하도 페널티
+        if vertical_vel < -0.3:  # 아래로 0.3m/s 이상 (더 엄격)
+            fall_penalty = -25.0 * abs(vertical_vel + 0.3)
+        else:
+            fall_penalty = 0.0
+        
+        # 수직 속도가 거의 0에 가까우면 보너스 (안정적 보행)
+        if abs(vertical_vel) < 0.05:
+            stability_bonus = 5.0
+        else:
+            stability_bonus = 0.0
+        
+        rewards['vertical_control'] = jump_penalty + fall_penalty + stability_bonus
+        
+        # 5-4. 전반적 안정성 (급격한 변화 최소화)
         body_stability = 1.0
         
-        # 수직 속도 안정성
-        vertical_vel = abs(self.data.qvel[2])
-        body_stability *= max(0, 1.0 - vertical_vel)
+        # 수직 속도 안정성 (작은 수직 움직임 선호)
+        vertical_stability = max(0, 1.0 - abs(vertical_vel) * 2.0)
+        body_stability *= vertical_stability
         
         # 각속도 안정성
         total_ang_vel = np.linalg.norm(self.data.qvel[3:6])
         body_stability *= max(0, 1.0 - total_ang_vel * 0.5)
         
         rewards['stability'] = body_stability * self.reward_weights['stability']
+        
+        # === 6. 보행 노력 보상 (지상 접촉하며 전진) ===
+        # 땅에 발이 닿아있으면서 동시에 전진할 때만 보상
+        walking_effort = 0.0
+        if num_contacts >= 2 and forward_vel > 0.05:  # 최소 2발 접촉 + 전진
+            walking_effort = forward_vel * num_contacts * 5.0  # 접촉 많을수록, 빠를수록 보상
+        elif num_contacts >= 1 and forward_vel > 0.02:  # 최소 1발 접촉 + 천천히 전진
+            walking_effort = forward_vel * 2.0
+        
+        rewards['walking_effort'] = walking_effort
         
         # 총 보상 (오버플로우 방지)
         total_reward = sum(rewards.values())
