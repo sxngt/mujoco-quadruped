@@ -15,7 +15,7 @@ rl/                    # 이전 (지저분한 구조)
 ├── test_*.py
 └── ...
 
-rl_organized/          # 새로운 (체계적인 구조)
+rl/                   # 새로운 (체계적인 구조)
 ├── environments/      # 환경별 분류
 ├── training/          # 학습 방식별 분류  
 ├── experiments/       # 실험 목적별 분류
@@ -54,7 +54,7 @@ python train.py  # import 에러 가능성
 
 ### 새로운 방식 (권장)
 ```bash
-cd rl_organized
+cd rl
 
 # 기본 학습
 python run_basic_training.py
