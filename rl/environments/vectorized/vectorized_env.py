@@ -7,7 +7,7 @@ Vectorized Environment for GO2 Forward Locomotion
 import numpy as np
 import gymnasium as gym
 from gymnasium.vector import VectorEnv
-from environment import GO2ForwardEnv
+from ..basic.environment import GO2ForwardEnv
 import multiprocessing as mp
 from typing import List, Tuple, Any, Dict
 import time

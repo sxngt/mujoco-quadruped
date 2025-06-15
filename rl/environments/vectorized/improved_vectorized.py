@@ -5,7 +5,7 @@
 
 import numpy as np
 import time
-from improved_environment import ImprovedGO2Env
+from ..improved.improved_environment import ImprovedGO2Env
 from typing import List, Tuple, Any, Dict
 
 

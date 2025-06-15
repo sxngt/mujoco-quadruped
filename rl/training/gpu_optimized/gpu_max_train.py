@@ -10,8 +10,8 @@ import time
 import os
 import argparse
 from datetime import datetime
-from simple_vectorized import SimpleVectorEnv
-from ppo_agent import PPOAgent
+from ...environments.vectorized.simple_vectorized import SimpleVectorEnv
+from ...agents.ppo_agent import PPOAgent
 import wandb
 
 
