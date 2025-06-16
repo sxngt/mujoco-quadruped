@@ -6,7 +6,7 @@
 
 import numpy as np
 import time
-from ..basic.environment import GO2ForwardEnv
+from environments.basic.environment import GO2ForwardEnv
 from typing import List, Tuple, Any, Dict
 
 

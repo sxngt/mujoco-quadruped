@@ -7,8 +7,9 @@
 import sys
 import os
 
-# 현재 디렉토리를 Python 경로에 추가
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# rl 디렉토리를 Python 경로에 추가
+rl_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, rl_dir)
 
 def main():
     from training.basic.train import main as train_main

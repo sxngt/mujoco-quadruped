@@ -2,7 +2,7 @@ import mujoco as mj
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
-from ...common.gait_generator import GaitGenerator, CyclicGaitReward
+from common.gait_generator import GaitGenerator, CyclicGaitReward
 
 
 class GO2ForwardEnv(gym.Env):

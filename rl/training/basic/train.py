@@ -2,8 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 import gymnasium as gym
-from ...environments.basic.environment import GO2ForwardEnv
-from ...agents.ppo_agent import PPOAgent
+from environments.basic.environment import GO2ForwardEnv
+from agents.ppo_agent import PPOAgent
 import wandb
 import argparse
 import os
