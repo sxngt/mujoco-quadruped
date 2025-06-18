@@ -64,8 +64,9 @@ class MultiRobotGO2Env(gym.Env):
         """
         여러 로봇이 포함된 scene.xml 파일 생성
         """
-        # 기본 GO2 scene.xml 읽기
-        base_scene_path = "go2_scene.xml"
+        # 기본 GO2 scene.xml 읽기 (assets 폴더에서)
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))  # rl 디렉토리
+        base_scene_path = os.path.join(base_dir, "assets", "go2_scene.xml")
         if not os.path.exists(base_scene_path):
             raise FileNotFoundError(f"기본 scene 파일을 찾을 수 없습니다: {base_scene_path}")
         

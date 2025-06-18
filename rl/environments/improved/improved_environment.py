@@ -12,7 +12,10 @@ class ImprovedGO2Env(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 50}
     
     def __init__(self, render_mode=None, use_reference_gait=True):
-        self.model_path = "go2_scene.xml"
+        # XML 파일 경로 설정 (assets 폴더에서 찾기)
+        import os
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))  # rl 디렉토리
+        self.model_path = os.path.join(base_dir, "assets", "go2_scene.xml")
         
         self.model = mj.MjModel.from_xml_path(self.model_path)
         self.data = mj.MjData(self.model)
