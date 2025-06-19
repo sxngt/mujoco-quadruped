@@ -1,5 +1,5 @@
 <mujoco model="go2_locomotion">
-  <compiler angle="radian" meshdir="../mujoco_menagerie/unitree_go2/assets" autolimits="true"/>
+  <compiler angle="radian" meshdir="/Users/sxngt/Research/mujoco_quadruped/mujoco_menagerie/unitree_go2/assets" autolimits="true"/>
 
   <!-- Physics settings for realistic simulation -->
   <option timestep="0.002" iterations="50" solver="PGS" cone="elliptic" 
