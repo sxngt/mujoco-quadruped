@@ -12,10 +12,30 @@ class ImprovedGO2Env(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 50}
     
     def __init__(self, render_mode=None, use_reference_gait=True):
-        # XML 파일 경로 설정 (assets 폴더에서 찾기)
+        # XML 파일 경로 설정 및 동적 수정
         import os
+        import tempfile
+        
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))  # rl 디렉토리
-        self.model_path = os.path.join(base_dir, "assets", "go2_scene.xml")
+        xml_template_path = os.path.join(base_dir, "assets", "go2_scene.xml")
+        
+        # 메시 디렉토리 절대 경로 설정
+        mesh_dir = os.path.join(os.path.dirname(base_dir), "mujoco_menagerie", "unitree_go2", "assets")
+        
+        # XML 내용 읽기 및 수정
+        with open(xml_template_path, 'r') as f:
+            xml_content = f.read()
+        
+        # meshdir을 절대 경로로 교체
+        xml_content = xml_content.replace(
+            'meshdir="/Users/sxngt/Research/mujoco_quadruped/mujoco_menagerie/unitree_go2/assets"',
+            f'meshdir="{mesh_dir}"'
+        )
+        
+        # 임시 XML 파일 생성
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False) as f:
+            f.write(xml_content)
+            self.model_path = f.name
         
         self.model = mj.MjModel.from_xml_path(self.model_path)
         self.data = mj.MjData(self.model)
@@ -641,3 +661,11 @@ class ImprovedGO2Env(gym.Env):
             except:
                 pass
             self.viewer = None
+        
+        # 임시 XML 파일 정리
+        if hasattr(self, 'model_path') and self.model_path.startswith('/tmp'):
+            try:
+                import os
+                os.unlink(self.model_path)
+            except:
+                pass
