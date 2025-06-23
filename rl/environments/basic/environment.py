@@ -78,7 +78,7 @@ class GO2ForwardEnv(gym.Env):
         self.initial_qpos = self.model.key_qpos[home_keyframe].copy()
         self.initial_qvel = np.zeros(self.model.nv)
         
-        self.max_episode_steps = 1000
+        self.max_episode_steps = float('inf')  # 무제한 에피소드 - 오직 넘어질 때만 종료
         self.current_step = 0
         
         # Contact tracking for foot contact detection
@@ -375,7 +375,7 @@ class GO2ForwardEnv(gym.Env):
         observation = self._get_observation()
         reward, reward_info = self._get_reward()
         terminated = self._is_terminated()
-        truncated = self.current_step >= self.max_episode_steps
+        truncated = False  # 시간 제한 없음 - 오직 넘어질 때만 에피소드 종료
         
         self.current_step += 1
         self.simulation_time += 0.002  # MuJoCo timestep

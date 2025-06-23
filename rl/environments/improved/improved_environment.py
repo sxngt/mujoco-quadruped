@@ -151,7 +151,7 @@ class ImprovedGO2Env(gym.Env):
         # 목표 전진 속도 설정
         self.target_forward_velocity = 0.8  # 0.8 m/s 목표
         
-        self.max_episode_steps = 15000  # 매우 긴 에피소드로 충분한 보행 학습 기회 제공
+        self.max_episode_steps = float('inf')  # 무제한 에피소드 - 오직 넘어질 때만 종료
         self.current_step = 0
         self.dt = self.model.opt.timestep
         
@@ -338,7 +338,7 @@ class ImprovedGO2Env(gym.Env):
         observation = self._get_observation()
         reward, reward_info = self._compute_modular_reward(smoothed_action, current_contacts)
         terminated = self._is_terminated()
-        truncated = self.current_step >= self.max_episode_steps
+        truncated = False  # 시간 제한 없음 - 오직 넘어질 때만 에피소드 종료
         
         # 렌더링
         if self.render_mode == "human":

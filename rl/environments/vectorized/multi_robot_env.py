@@ -53,7 +53,7 @@ class MultiRobotGO2Env(gym.Env):
         )
         
         # 에피소드 관련 변수
-        self.max_episode_steps = 1000
+        self.max_episode_steps = float('inf')  # 무제한 에피소드 - 오직 넘어질 때만 종료
         self.current_step = 0
         
         print(f"🤖 {num_robots}개 로봇 멀티 환경 생성 완료")
@@ -412,7 +412,7 @@ class MultiRobotGO2Env(gym.Env):
         observation = self._get_observation()
         reward = self._get_reward()
         terminated = self._is_terminated()
-        truncated = self.current_step >= self.max_episode_steps
+        truncated = False  # 시간 제한 없음 - 오직 넘어질 때만 에피소드 종료
         
         self.current_step += 1
         
