@@ -569,60 +569,50 @@ class ImprovedGO2Env(gym.Env):
         return self.data.cvel[foot_body * 6: foot_body * 6 + 3]
     
     def _is_terminated(self):
-        """극도로 관대한 종료 조건 - 로봇이 실제 보행을 시도할 수 있도록"""
+        """최대한 관대한 종료 조건 - 로봇이 충분히 보행을 시도할 수 있도록"""
         
         body_height = self.data.qpos[2]
         body_quat = self.data.qpos[3:7]
         
-        # === 오직 극단적인 실패 상황에서만 종료 ===
+        # === 정말 극단적인 실패 상황에서만 종료 ===
         
-        # 1. 완전히 바닥에 눌러붙은 경우 (매우 관대)
-        if body_height < 0.01:  # 1cm 이하 (바닥에 완전히 붙음)
-            print(f"⚠️ 에피소드 종료: 완전히 바닥에 붙음 {body_height:.3f}m")
+        # 1. 완전히 바닥에 눌러붙어서 움직일 수 없는 경우
+        if body_height < -0.05:  # 지면 아래로 뚫고 들어간 경우만
+            print(f"⚠️ 에피소드 종료: 지면 아래로 침몰 {body_height:.3f}m")
             return True
         
-        # 2. 완전히 뒤집혀서 뱃바닥이 위를 향하는 경우
+        # 2. 완전히 뒤집혀서 뱃바닥이 위를 향하는 경우 (더 관대)
         z_axis = np.array([
             2*(body_quat[1]*body_quat[3] + body_quat[0]*body_quat[2]),
             2*(body_quat[2]*body_quat[3] - body_quat[0]*body_quat[1]),
             body_quat[0]**2 - body_quat[1]**2 - body_quat[2]**2 + body_quat[3]**2
         ])
-        if z_axis[2] < -0.8:  # 완전히 뒤집힌 경우 (매우 관대)
-            print(f"⚠️ 에피소드 종료: 완전히 뒤집힘 (z_axis: {z_axis[2]:.3f})")
+        if z_axis[2] < -0.95:  # 거의 완전히 뒤집힌 경우만 (더 관대)
+            print(f"⚠️ 에피소드 종료: 거의 완전 뒤집힘 (z_axis: {z_axis[2]:.3f})")
             return True
         
-        # 3. 학습 영역을 크게 벗어난 경우 (매우 관대)
-        if abs(self.data.qpos[1]) > 10.0:  # 좌우 10m (두 배로 확장)
-            print(f"⚠️ 에피소드 종료: 학습 영역 벗어남 (y: {self.data.qpos[1]:.3f}m)")
+        # 3. 학습 영역을 매우 크게 벗어난 경우만
+        if abs(self.data.qpos[1]) > 50.0:  # 좌우 50m (5배 확장)
+            print(f"⚠️ 에피소드 종료: 매우 먼 거리 이탈 (y: {self.data.qpos[1]:.3f}m)")
             return True
         
-        if self.data.qpos[0] < -10.0:  # 뒤로 10m (두 배로 확장)
-            print(f"⚠️ 에피소드 종료: 후진 한계 (x: {self.data.qpos[0]:.3f}m)")
+        if self.data.qpos[0] < -50.0:  # 뒤로 50m (5배 확장)
+            print(f"⚠️ 에피소드 종료: 극도 후진 (x: {self.data.qpos[0]:.3f}m)")
             return True
         
-        # 4. 관절이 완전히 한계에 도달한 경우만 (매우 관대)
-        joint_pos = self.data.qpos[7:7+self.n_actions]
-        for i in range(self.n_actions):
-            if i + 1 < self.model.njnt:
-                joint_range = self.model.jnt_range[i + 1]
-                # 한계의 99%까지 허용 (거의 모든 움직임 허용)
-                margin = (joint_range[1] - joint_range[0]) * 0.01
-                if joint_pos[i] <= joint_range[0] + margin or joint_pos[i] >= joint_range[1] - margin:
-                    print(f"⚠️ 에피소드 종료: 관절 {i} 완전 한계 ({joint_pos[i]:.3f})")
-                    return True
-        
-        # 5. 매우 격렬한 회전만 제한 (매우 관대)
+        # 4. 극도로 격렬한 회전만 제한 (매우 관대)
         angular_speed = np.linalg.norm(self.data.qvel[3:6])
-        if angular_speed > 50.0:  # 두 배로 증가
+        if angular_speed > 100.0:  # 두 배 더 증가
             print(f"⚠️ 에피소드 종료: 극도의 회전 ({angular_speed:.3f} rad/s)")
             return True
         
-        # 6. 완전히 정지한 경우 (무한정 기다리지 않기 위함)
-        if self.current_step > 1000:  # 1000스텝 후부터 체크
-            total_velocity = np.linalg.norm(self.data.qvel[:6])  # 전체 속도
-            if total_velocity < 0.001:  # 거의 정지
-                print(f"⚠️ 에피소드 종료: 완전 정지 상태 지속")
-                return True
+        # 5. NaN이나 inf 값 발생시만 종료
+        if (np.any(np.isnan(self.data.qpos)) or np.any(np.isinf(self.data.qpos)) or
+            np.any(np.isnan(self.data.qvel)) or np.any(np.isinf(self.data.qvel))):
+            print(f"⚠️ 에피소드 종료: 수치 불안정 (NaN/Inf 발생)")
+            return True
+        
+        # 정지 상태 체크 완전 제거 - 로봇이 얼마나 오래 서있어도 괜찮음
         
         return False
     

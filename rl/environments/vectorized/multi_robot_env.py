@@ -334,18 +334,19 @@ class MultiRobotGO2Env(gym.Env):
         return total_reward / self.num_robots  # 평균 보상
     
     def _is_terminated(self):
-        """종료 조건 확인 (모든 로봇이 넘어지면 종료)"""
-        fallen_count = 0
+        """최대한 관대한 종료 조건 - 로봇들이 충분히 보행을 시도할 수 있도록"""
+        severely_failed_count = 0
         
         for robot_idx in range(self.num_robots):
             freejoint_qpos_start = robot_idx * 7
             if freejoint_qpos_start + 3 <= len(self.data.qpos):
                 body_height = self.data.qpos[freejoint_qpos_start + 2]
-                if body_height < 0.1:
-                    fallen_count += 1
+                # 지면 아래로 뚫고 들어간 경우만 실패로 간주
+                if body_height < -0.05:
+                    severely_failed_count += 1
         
-        # 절반 이상 넘어지면 종료
-        return fallen_count > self.num_robots // 2
+        # 대부분의 로봇이 심각하게 실패한 경우만 종료
+        return severely_failed_count > self.num_robots * 0.8
     
     def reset(self, seed=None, options=None):
         """환경 리셋"""

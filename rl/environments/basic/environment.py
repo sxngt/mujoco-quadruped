@@ -298,29 +298,41 @@ class GO2ForwardEnv(gym.Env):
         }
     
     def _is_terminated(self):
-        # === 전진 학습을 위한 관대한 종료 조건 ===
+        """최대한 관대한 종료 조건 - 로봇이 충분히 보행을 시도할 수 있도록"""
         
         body_height = self.data.qpos[2]
         body_quat = self.data.qpos[3:7]  # [w, x, y, z]
         
-        # 1. 완전히 넘어졌을 때만 종료 (학습 기회 최대화)
-        if body_height < 0.10:  # 매우 관대한 높이 제한
+        # === 정말 극단적인 실패 상황에서만 종료 ===
+        
+        # 1. 지면 아래로 뚫고 들어간 경우만
+        if body_height < -0.05:
+            print(f"⚠️ 에피소드 종료: 지면 아래로 침몰 {body_height:.3f}m")
             return True
             
-        # 2. 뒤집어졌을 때만 종료
+        # 2. 거의 완전히 뒤집힌 경우만
         z_axis = np.array([2*(body_quat[1]*body_quat[3] + body_quat[0]*body_quat[2]),
                           2*(body_quat[2]*body_quat[3] - body_quat[0]*body_quat[1]),
                           body_quat[0]**2 - body_quat[1]**2 - body_quat[2]**2 + body_quat[3]**2])
         
-        if z_axis[2] < -0.1:  # 거의 뒤집어진 상태
+        if z_axis[2] < -0.95:  # 거의 완전히 뒤집힌 경우만
+            print(f"⚠️ 에피소드 종료: 거의 완전 뒤집힘 (z_axis: {z_axis[2]:.3f})")
             return True
         
-        # 3. 너무 멀리 옆으로 벗어났을 때
-        if abs(self.data.qpos[1]) > 5.0:  # 매우 관대한 측면 제한
+        # 3. 매우 먼 거리 이탈시만
+        if abs(self.data.qpos[1]) > 50.0:  # 좌우 50m
+            print(f"⚠️ 에피소드 종료: 매우 먼 거리 이탈 (y: {self.data.qpos[1]:.3f}m)")
             return True
         
-        # 4. 뒤로 너무 많이 갔을 때
-        if self.data.qpos[0] < -2.0:  # 뒤로 2m 이상 가면 종료
+        # 4. 극도 후진시만  
+        if self.data.qpos[0] < -50.0:  # 뒤로 50m
+            print(f"⚠️ 에피소드 종료: 극도 후진 (x: {self.data.qpos[0]:.3f}m)")
+            return True
+        
+        # 5. NaN/Inf 발생시만
+        if (np.any(np.isnan(self.data.qpos)) or np.any(np.isinf(self.data.qpos)) or
+            np.any(np.isnan(self.data.qvel)) or np.any(np.isinf(self.data.qvel))):
+            print(f"⚠️ 에피소드 종료: 수치 불안정 (NaN/Inf 발생)")
             return True
             
         return False
