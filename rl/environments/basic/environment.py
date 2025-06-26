@@ -73,7 +73,7 @@ class GO2ForwardEnv(gym.Env):
             shape=(obs_dim,), dtype=np.float32
         )
         
-        # Store initial position from keyframe (standing pose)
+        # Store initial position from keyframe (standing pose) - XML 표준 사용
         home_keyframe = 0  # Index of 'home' keyframe
         self.initial_qpos = self.model.key_qpos[home_keyframe].copy()
         self.initial_qvel = np.zeros(self.model.nv)

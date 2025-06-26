@@ -143,23 +143,51 @@ class ImprovedTrainer:
             current_episode_lengths += 1
             steps_collected += self.args.num_envs
             
-            # 에피소드 완료 처리 (자동 리셋 없이)
+            # 에피소드 완료 처리 - 종료 원인 상세 분석
             reset_envs = []
             for env_idx in range(self.args.num_envs):
                 if dones[env_idx]:
+                    # 종료 원인 상세 분석
+                    term_reason = "UNKNOWN"
+                    if terminated[env_idx] and truncated[env_idx]:
+                        term_reason = "BOTH_TERM_TRUNC"
+                    elif terminated[env_idx]:
+                        term_reason = "TERMINATED"
+                    elif truncated[env_idx]:
+                        term_reason = "TRUNCATED"
+                    
                     self.episode_rewards[env_idx].append(current_episode_rewards[env_idx])
                     self.episode_lengths[env_idx].append(current_episode_lengths[env_idx])
                     self.episode_counts[env_idx] += 1
                     
+                    # 상세한 종료 정보 출력
+                    print(f"🔚 환경 {env_idx} 에피소드 종료 - 원인: {term_reason}")
+                    print(f"   보상: {current_episode_rewards[env_idx]:.2f}, 길이: {current_episode_lengths[env_idx]}")
+                    print(f"   terminated: {terminated[env_idx]}, truncated: {truncated[env_idx]}")
+                    
+                    # 환경별 추가 정보
+                    if isinstance(infos[env_idx], dict):
+                        if 'contacts' in infos[env_idx]:
+                            contacts = infos[env_idx]['contacts']
+                            print(f"   발 접촉: {sum(1 for c in contacts.values() if c.get('in_contact', False))}/4")
+                        
+                        # 주요 보상 구성 요소
+                        important_rewards = ['forward', 'survival', 'stability', 'total']
+                        reward_info = []
+                        for key in important_rewards:
+                            if key in infos[env_idx]:
+                                reward_info.append(f"{key}: {infos[env_idx][key]:.2f}")
+                        if reward_info:
+                            print(f"   주요 보상: {', '.join(reward_info)}")
+                    
                     current_episode_rewards[env_idx] = 0
                     current_episode_lengths[env_idx] = 0
                     reset_envs.append(env_idx)
-                    
-                    print(f"환경 {env_idx} 에피소드 종료: 보상 {current_episode_rewards[env_idx]:.2f}, 길이 {current_episode_lengths[env_idx]}")
             
-            # 필요시만 리셋 (벡터화 환경에서 자동 처리됨)
+            # 리셋 정보
             if len(reset_envs) > 0:
-                print(f"{len(reset_envs)}개 환경이 자동 리셋되었습니다.")
+                print(f"📄 {len(reset_envs)}개 환경이 자동 리셋되었습니다: {reset_envs}")
+                print("="*80)
             
             # 렌더링
             if self.args.render and steps_collected % (self.args.num_envs * 10) == 0:

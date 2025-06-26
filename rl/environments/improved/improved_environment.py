@@ -75,16 +75,16 @@ class ImprovedGO2Env(gym.Env):
         )
         
         # 참조 보행 자세 초기화 설정
-        self.standing_height = 0.28  # 목표 서있는 높이
+        self.standing_height = 0.27  # XML keyframe과 일치하는 높이
         self.init_joint_pos = np.array([
-            # FL (앞왼쪽): hip, thigh, calf
-            0.0, 0.8, -1.6,
+            # FL (앞왼쪽): hip, thigh, calf - XML keyframe 값 사용
+            0.0, 0.9, -1.8,
             # FR (앞오른쪽): hip, thigh, calf  
-            0.0, 0.8, -1.6,
+            0.0, 0.9, -1.8,
             # RL (뒤왼쪽): hip, thigh, calf
-            0.0, 0.8, -1.6,
+            0.0, 0.9, -1.8,
             # RR (뒤오른쪽): hip, thigh, calf
-            0.0, 0.8, -1.6
+            0.0, 0.9, -1.8
         ])
         
         # 액션 스무싱을 위한 버퍼
@@ -184,13 +184,13 @@ class ImprovedGO2Env(gym.Env):
         joint_start_idx = 7
         self.data.qpos[joint_start_idx:joint_start_idx+self.n_actions] = self.init_joint_pos
         
-        # 약간의 무작위성 추가 (안정성 유지)
+        # 매우 작은 무작위성 추가 (안정성 우선)
         if self.np_random is not None:
-            # 위치에 작은 노이즈
-            self.data.qpos[0:2] += self.np_random.uniform(-0.05, 0.05, 2)
-            # 관절에 작은 노이즈
+            # 위치에 최소한의 노이즈
+            self.data.qpos[0:2] += self.np_random.uniform(-0.02, 0.02, 2)
+            # 관절에 최소한의 노이즈 (안정성 보장)
             self.data.qpos[joint_start_idx:joint_start_idx+self.n_actions] += \
-                self.np_random.uniform(-0.1, 0.1, self.n_actions)
+                self.np_random.uniform(-0.02, 0.02, self.n_actions)
         
         # 시뮬레이션 전진
         mj.mj_forward(self.model, self.data)
@@ -339,6 +339,29 @@ class ImprovedGO2Env(gym.Env):
         reward, reward_info = self._compute_modular_reward(smoothed_action, current_contacts)
         terminated = self._is_terminated()
         truncated = False  # 시간 제한 없음 - 오직 넘어질 때만 에피소드 종료
+        
+        # 디버그: 종료 상황 감지
+        if terminated:
+            body_height = self.data.qpos[2]
+            body_quat = self.data.qpos[3:7]
+            z_axis = np.array([
+                2*(body_quat[1]*body_quat[3] + body_quat[0]*body_quat[2]),
+                2*(body_quat[2]*body_quat[3] - body_quat[0]*body_quat[1]),
+                body_quat[0]**2 - body_quat[1]**2 - body_quat[2]**2 + body_quat[3]**2
+            ])
+            angular_speed = np.linalg.norm(self.data.qvel[3:6])
+            
+            print(f"🚨 에피소드 종료 감지!")
+            print(f"   스텝: {self.current_step}, 높이: {body_height:.3f}m")
+            print(f"   z축: {z_axis[2]:.3f}, 각속도: {angular_speed:.1f} rad/s")
+            print(f"   위치: x={self.data.qpos[0]:.2f}, y={self.data.qpos[1]:.2f}")
+            print(f"   발 접촉: {sum(current_contacts)}/4")
+        
+        # 매 100스텝마다 상태 정보 출력
+        if self.current_step % 100 == 0:
+            body_height = self.data.qpos[2]
+            forward_vel = self.data.qvel[0]
+            print(f"📊 스텝 {self.current_step}: 높이 {body_height:.3f}m, 전진속도 {forward_vel:.3f}m/s, 접촉 {sum(current_contacts)}/4")
         
         # 렌더링
         if self.render_mode == "human":
@@ -505,24 +528,24 @@ class ImprovedGO2Env(gym.Env):
         
         rewards['joint_safety'] = joint_safety_penalty * self.reward_weights['joint_safety']
         
-        # 5-3. 수직 움직임 제어 (점프 방지)
+        # 5-3. 수직 움직임 제어 (점프 방지) - 완화된 페널티
         vertical_vel = self.data.qvel[2]  # z축 속도
         
-        # 위로 점프하는 것 매우 강하게 페널티
-        if vertical_vel > 0.1:  # 위로 0.1m/s 이상 (더 엄격)
-            jump_penalty = -50.0 * (vertical_vel - 0.1)  # 더 강한 페널티
+        # 점프 억제 (매우 완화된 페널티)
+        if vertical_vel > 0.3:  # 위로 0.3m/s 이상일 때만 (관대)
+            jump_penalty = -2.0 * (vertical_vel - 0.3)  # 매우 약한 페널티
         else:
             jump_penalty = 0.0
         
-        # 급격한 낙하도 페널티
-        if vertical_vel < -0.3:  # 아래로 0.3m/s 이상 (더 엄격)
-            fall_penalty = -25.0 * abs(vertical_vel + 0.3)
+        # 급격한 낙하 억제 (매우 완화된 페널티)
+        if vertical_vel < -0.5:  # 아래로 0.5m/s 이상일 때만 (관대)
+            fall_penalty = -1.0 * abs(vertical_vel + 0.5)  # 매우 약한 페널티
         else:
             fall_penalty = 0.0
         
-        # 수직 속도가 거의 0에 가까우면 보너스 (안정적 보행)
-        if abs(vertical_vel) < 0.05:
-            stability_bonus = 5.0
+        # 적당한 수직 움직임은 허용
+        if abs(vertical_vel) < 0.2:  # 0.2m/s 이하면 정상
+            stability_bonus = 1.0  # 작은 보너스
         else:
             stability_bonus = 0.0
         
