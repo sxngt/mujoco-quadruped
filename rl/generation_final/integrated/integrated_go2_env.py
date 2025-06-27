@@ -1,10 +1,23 @@
-import mujoco as mj
+import mujoco
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
+from gymnasium.envs.mujoco import MujocoEnv
+from pathlib import Path
 
 
-class IntegratedGO2Env(gym.Env):
+DEFAULT_CAMERA_CONFIG = {
+    "azimuth": 90.0,
+    "distance": 3.0,
+    "elevation": -25.0,
+    "lookat": np.array([0., 0., 0.]),
+    "fixedcamid": 0,
+    "trackbodyid": -1,
+    "type": 2,
+}
+
+
+class IntegratedGO2Env(MujocoEnv):
     """
     Unitree GO2 환경 - 성공적인 참조 레포지터리 기법을 GO2에 적용
     참조: nimazareian/quadruped-rl-locomotion
