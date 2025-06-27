@@ -129,25 +129,34 @@ class IntegratedTrainer:
                 action, log_prob, value = self.agent.get_action(obs)
                 next_obs, reward, terminated, truncated, info = self.env.step(action)
                 
-                # 훈련 중 렌더링 (매 스텝마다)
+                # 훈련 중 렌더링 (최적화됨)
                 if self.render_training:
-                    if total_steps % 50 == 0:  # 50스텝마다 렌더링 상태 로그
-                        print(f"🎬 렌더링 중... (step {total_steps}, episode {episode_num})")
+                    # 성능을 위해 매 스텝이 아닌 적절한 간격으로 렌더링
+                    should_render = (total_steps % 2 == 0)  # 2스텝마다 렌더링 (25 FPS 정도)
                     
-                    try:
-                        render_result = self.env.render()
-                        if total_steps < 5:  # 처음 5스텝은 렌더링 결과 로그
-                            print(f"  Step {total_steps}: 렌더링 결과 = {render_result}")
+                    if should_render:
+                        if total_steps % 100 == 0:  # 100스텝마다 상태 로그
+                            print(f"🎬 렌더링 중... (step {total_steps}, episode {episode_num})")
+                        
+                        try:
+                            render_result = self.env.render()
                             
-                        # macOS에서는 추가 처리가 필요할 수 있음
-                        if render_result is None and total_steps < 5:
-                            print(f"  ⚠️ 렌더링 결과가 None입니다. 뷰어 상태: {self.env.viewer}")
-                            
-                    except Exception as e:
-                        if total_steps < 5:
-                            print(f"  ❌ 렌더링 실패: {e}")
-                    
-                    time.sleep(0.03)  # 약 30 FPS로 조절
+                            # 초기 렌더링 상태 확인
+                            if total_steps < 10:
+                                print(f"  Step {total_steps}: 렌더링 = {render_result}")
+                                if render_result is None:
+                                    print(f"    뷰어 상태: {type(self.env.viewer)}")
+                                    
+                            # 렌더링 실패 시 뷰어 재초기화 시도 (한 번만)
+                            if render_result is None and not hasattr(self, '_viewer_reset_attempted'):
+                                print("🔧 뷰어 재초기화 시도...")
+                                self.env.viewer = None
+                                self._viewer_reset_attempted = True
+                                
+                        except Exception as e:
+                            if total_steps < 10:
+                                print(f"  ❌ Step {total_steps} 렌더링 실패: {e}")
+                            # 치명적이지 않은 렌더링 오류는 무시하고 계속 진행
                 
                 # 경험 저장
                 self.agent.store_transition(obs, action, reward, value, log_prob, terminated)
@@ -332,6 +341,8 @@ def parse_args():
                         help="훈련 없이 렌더링 테스트만 즉시 실행")
     parser.add_argument("--quick_render", action="store_true",
                         help="임의 행동으로 즉시 렌더링 테스트 (훈련 없음)")
+    parser.add_argument("--render_steps", type=int, default=None,
+                        help="짧은 훈련으로 렌더링 테스트 (예: --render_steps 500)")
     
     # 모델 로드 관련
     parser.add_argument("--load_model", type=str, default=None,
@@ -347,6 +358,12 @@ def main():
     
     # 명령줄 인수 파싱
     args = parse_args()
+    
+    # 렌더링 테스트를 위한 짧은 훈련 옵션
+    if args.render_steps:
+        args.total_timesteps = args.render_steps
+        args.render = True
+        print(f"🎯 짧은 렌더링 테스트 모드: {args.render_steps} 스텝")
     
     # 훈련 시작
     trainer = IntegratedTrainer(

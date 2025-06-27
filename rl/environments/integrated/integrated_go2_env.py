@@ -41,8 +41,9 @@ class IntegratedGO2Env(gym.Env):
                 os.environ.setdefault('LIBGL_ALWAYS_INDIRECT', '0')
                 
             elif system == "Darwin":  # macOS 환경
-                print("ℹ️  macOS에서는 mjpython으로 실행하는 것이 권장됩니다.")
-                print("예: mjpython train_integrated.py --render")
+                print("ℹ️  macOS 환경 감지: 최적화된 렌더링 모드 사용")
+                print("💡 더 나은 성능을 위해서는 mjpython을 사용하세요:")
+                print("   mjpython train_integrated.py --render")
                 
             print(f"🖥️  렌더링 모드: {render_mode}, 시스템: {system}")
         
@@ -409,54 +410,95 @@ class IntegratedGO2Env(gym.Env):
         return None
     
     def _render_human(self):
-        """인간이 볼 수 있는 GUI 렌더링 (공식 문서 기준)"""
+        """인간이 볼 수 있는 GUI 렌더링 (macOS 호환성 개선)"""
         if self.viewer is None:
-            try:
-                import mujoco.viewer
-                # 공식 문서 권장: passive viewer 사용
-                self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
-                if self.viewer is not None:
-                    # 카메라 초기 설정
-                    self.viewer.cam.distance = 3.0
-                    self.viewer.cam.elevation = -20
-                    self.viewer.cam.azimuth = 135
-                    self.viewer.cam.lookat[:] = [0, 0, 0.3]
-                    print("✅ Passive viewer 초기화 성공")
-                else:
-                    raise RuntimeError("Passive viewer 생성 실패")
-            except Exception as e:
-                print(f"❌ Passive viewer 실패: {e}")
+            import platform
+            system = platform.system()
+            
+            if system == "Darwin":  # macOS
                 try:
-                    # 대안: blocking viewer (비권장이지만 동작함)
-                    print("🔄 Blocking viewer 시도...")
+                    import mujoco.viewer
+                    # macOS에서는 blocking viewer가 더 안정적
+                    print("🍎 macOS: blocking viewer 사용 중...")
                     self.viewer = mujoco.viewer.launch(self.model, self.data)
-                    print("✅ Blocking viewer 초기화 성공")
-                except Exception as e2:
-                    print(f"❌ Blocking viewer도 실패: {e2}")
+                    print("✅ macOS blocking viewer 초기화 성공")
+                    
+                    # 카메라 설정은 뷰어가 실행된 후에
+                    if hasattr(self.viewer, 'cam'):
+                        self.viewer.cam.distance = 3.0
+                        self.viewer.cam.elevation = -20
+                        self.viewer.cam.azimuth = 135
+                        self.viewer.cam.lookat[:] = [0, 0, 0.3]
+                    
+                    return True  # macOS blocking viewer는 실행 후 바로 반환
+                    
+                except Exception as e:
+                    print(f"❌ macOS viewer 실패: {e}")
+                    print("🔧 mjpython 사용을 권장합니다: mjpython train_integrated.py --render")
                     self.viewer = None
                     return None
+                    
+            else:  # Linux/Ubuntu
+                try:
+                    import mujoco.viewer
+                    # Linux에서는 passive viewer 사용
+                    print("🐧 Linux: passive viewer 사용 중...")
+                    self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
+                    if self.viewer is not None:
+                        # 카메라 초기 설정
+                        self.viewer.cam.distance = 3.0
+                        self.viewer.cam.elevation = -20
+                        self.viewer.cam.azimuth = 135
+                        self.viewer.cam.lookat[:] = [0, 0, 0.3]
+                        print("✅ Linux passive viewer 초기화 성공")
+                    else:
+                        raise RuntimeError("Passive viewer 생성 실패")
+                except Exception as e:
+                    print(f"❌ Linux passive viewer 실패: {e}")
+                    try:
+                        # 대안: blocking viewer
+                        print("🔄 Linux blocking viewer 시도...")
+                        self.viewer = mujoco.viewer.launch(self.model, self.data)
+                        print("✅ Linux blocking viewer 초기화 성공")
+                    except Exception as e2:
+                        print(f"❌ Linux blocking viewer도 실패: {e2}")
+                        self.viewer = None
+                        return None
         
         if self.viewer is not None:
+            import platform
+            system = platform.system()
+            
             try:
-                # 뷰어 상태 확인 (passive viewer의 경우)
+                # 뷰어 상태 확인 (passive viewer의 경우만)
                 if hasattr(self.viewer, 'is_running') and not self.viewer.is_running():
                     print("뷰어 창이 닫혔습니다.")
                     self.viewer = None
                     return None
                 
-                # 로봇 추적 카메라
-                if len(self.data.qpos) >= 2:
-                    robot_x = self.data.qpos[0]
-                    robot_y = self.data.qpos[1]
-                    self.viewer.cam.lookat[0] = robot_x
-                    self.viewer.cam.lookat[1] = robot_y
+                # 로봇 추적 카메라 (안전하게)
+                if len(self.data.qpos) >= 2 and hasattr(self.viewer, 'cam'):
+                    try:
+                        robot_x = self.data.qpos[0]
+                        robot_y = self.data.qpos[1]
+                        self.viewer.cam.lookat[0] = robot_x
+                        self.viewer.cam.lookat[1] = robot_y
+                    except Exception:
+                        pass  # 카메라 업데이트 실패는 치명적이지 않음
                 
-                # 공식 문서 권장: sync로 데이터 동기화
-                self.viewer.sync()
-                return True
+                # 데이터 동기화 (뷰어 타입별 처리)
+                if system == "Darwin":  # macOS
+                    # macOS blocking viewer는 자동 업데이트
+                    return True
+                else:  # Linux
+                    # Linux passive viewer는 sync 필요
+                    if hasattr(self.viewer, 'sync'):
+                        self.viewer.sync()
+                    return True
                 
             except Exception as e:
                 print(f"❌ 뷰어 업데이트 실패: {e}")
+                # 에러가 발생해도 뷰어를 None으로 만들지 않음 (재시도 가능)
                 return None
         
         return None
