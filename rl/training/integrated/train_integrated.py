@@ -27,15 +27,18 @@ class IntegratedTrainer:
                  total_timesteps=5_000_000,
                  eval_freq=10_000,
                  save_freq=50_000,
-                 log_freq=1000):
+                 log_freq=1000,
+                 render_training=False):
         
         self.total_timesteps = total_timesteps
         self.eval_freq = eval_freq
         self.save_freq = save_freq
         self.log_freq = log_freq
+        self.render_training = render_training
         
-        # 환경 생성
-        self.env = IntegratedGO2Env(render_mode=None)
+        # 환경 생성 (훈련 중 렌더링 여부에 따라)
+        render_mode = "human" if render_training else None
+        self.env = IntegratedGO2Env(render_mode=render_mode)
         
         # PPO 에이전트 생성 (참조 레포지터리 하이퍼파라미터 사용)
         self.agent = PPOAgent(
@@ -70,6 +73,7 @@ class IntegratedTrainer:
         print(f"액션 차원: {self.env.action_space.shape[0]}")
         print(f"저장 위치: {self.save_dir}")
         print(f"디바이스: {self.agent.device}")
+        print(f"훈련 중 렌더링: {'✅ 활성화' if render_training else '❌ 비활성화'}")
         
     def log_message(self, message):
         """로그 메시지 출력 및 파일 저장"""
@@ -124,6 +128,11 @@ class IntegratedTrainer:
             for step in range(rollout_length):
                 action, log_prob, value = self.agent.get_action(obs)
                 next_obs, reward, terminated, truncated, info = self.env.step(action)
+                
+                # 훈련 중 렌더링 (매 스텝마다)
+                if self.render_training:
+                    self.env.render()
+                    time.sleep(0.01)  # 너무 빠르지 않게 조절
                 
                 # 경험 저장
                 self.agent.store_transition(obs, action, reward, value, log_prob, terminated)
@@ -299,11 +308,15 @@ def parse_args():
     
     # 렌더링 및 테스트 옵션
     parser.add_argument("--render", action="store_true",
-                        help="훈련 후 테스트 시 렌더링 활성화")
+                        help="훈련 중 실시간 렌더링 활성화 (학습 과정 시각화)")
     parser.add_argument("--test_episodes", type=int, default=3,
                         help="테스트 에피소드 수 (기본값: 3)")
     parser.add_argument("--no_test", action="store_true",
                         help="훈련 후 테스트 건너뛰기")
+    parser.add_argument("--render_test_only", action="store_true",
+                        help="훈련 없이 렌더링 테스트만 즉시 실행")
+    parser.add_argument("--quick_render", action="store_true",
+                        help="임의 행동으로 즉시 렌더링 테스트 (훈련 없음)")
     
     # 모델 로드 관련
     parser.add_argument("--load_model", type=str, default=None,
@@ -325,12 +338,46 @@ def main():
         total_timesteps=args.total_timesteps,
         eval_freq=args.eval_freq,
         save_freq=args.save_freq,
-        log_freq=args.log_freq
+        log_freq=args.log_freq,
+        render_training=args.render  # 훈련 중 렌더링 옵션 전달
     )
     
     try:
-        # 테스트만 실행하는 경우
-        if args.test_only:
+        # 즉시 렌더링 테스트 (훈련 없음)
+        if args.quick_render or args.render_test_only:
+            print(f"\n=== 즉시 렌더링 테스트 ===")
+            test_env = IntegratedGO2Env(render_mode="human")
+            obs, _ = test_env.reset()
+            
+            print("무작위 행동으로 렌더링 테스트 중... (Ctrl+C로 종료)")
+            step_count = 0
+            
+            try:
+                while True:
+                    # 무작위 행동 (약하게)
+                    action = test_env.action_space.sample() * 0.3
+                    obs, reward, terminated, truncated, info = test_env.step(action)
+                    test_env.render()
+                    
+                    step_count += 1
+                    if step_count % 100 == 0:
+                        print(f"Step {step_count}, 보상: {reward:.2f}")
+                    
+                    if terminated or truncated:
+                        print(f"에피소드 종료 (step {step_count}), 리셋...")
+                        obs, _ = test_env.reset()
+                        step_count = 0
+                    
+                    time.sleep(0.02)  # 50 FPS
+                    
+            except KeyboardInterrupt:
+                print(f"\n렌더링 테스트 완료 ({step_count} 스텝)")
+            finally:
+                test_env.close()
+            return
+        
+        # 테스트만 실행하는 경우 (훈련된 모델)
+        elif args.test_only:
             if args.load_model and os.path.exists(args.load_model):
                 print(f"\n=== 모델 테스트 모드 ===")
                 trainer.test_trained_model(args.load_model, num_episodes=args.test_episodes, render=args.render)
