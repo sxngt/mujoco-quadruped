@@ -181,6 +181,23 @@ class IntegratedGO2Env(gym.Env):
         lin_vel_error = abs(forward_vel - self.target_velocity[0])
         lin_vel_reward = np.exp(-lin_vel_error * 2.0) * 10.0
         
+        # === 정지 방지 페널티 (강화) ===
+        total_vel = np.linalg.norm(self.data.qvel[:3])  # 전체 선형 속도
+        if total_vel < 0.1:  # 거의 정지 상태
+            stationary_penalty = -50.0  # 강한 페널티
+        elif total_vel < 0.3:  # 느린 움직임
+            stationary_penalty = -20.0  # 중간 페널티
+        else:
+            stationary_penalty = 0.0
+            
+        # 전진 방향 보상
+        if forward_vel > 0.1:
+            forward_bonus = 5.0
+        elif forward_vel < 0:  # 후진 페널티
+            forward_bonus = -10.0
+        else:
+            forward_bonus = 0.0
+        
         # === 각속도 추적 보상 ===
         target_ang_vel = 0.0  # 직진
         ang_vel_error = abs(self.data.qvel[5] - target_ang_vel)  # yaw 속도
@@ -240,12 +257,14 @@ class IntegratedGO2Env(gym.Env):
         ])
         orientation_cost = -2.0 * max(0, 0.7 - z_axis[2])  # z축이 위를 향하도록
         
-        # === 총 보상 (참조 방식 가중치) ===
+        # === 총 보상 (개선된 가중치) ===
         total_reward = (
             lin_vel_reward +      # 선형 속도 추적
             ang_vel_reward +      # 각속도 추적  
             feet_air_reward +     # 발 공중 시간
             alive_reward +        # 생존 보상
+            stationary_penalty +  # 정지 방지 페널티 (새로 추가)
+            forward_bonus +       # 전진 보너스 (새로 추가)
             torque_cost +         # 토크 비용
             action_rate_cost +    # 액션 변화율 비용
             vertical_cost +       # 수직 속도 비용
@@ -259,6 +278,8 @@ class IntegratedGO2Env(gym.Env):
             'ang_vel_reward': ang_vel_reward,
             'feet_air_reward': feet_air_reward,
             'alive_reward': alive_reward,
+            'stationary_penalty': stationary_penalty,  # 새로 추가
+            'forward_bonus': forward_bonus,            # 새로 추가
             'torque_cost': torque_cost,
             'action_rate_cost': action_rate_cost,
             'vertical_cost': vertical_cost,
@@ -269,11 +290,12 @@ class IntegratedGO2Env(gym.Env):
         }
     
     def _is_terminated(self):
-        """참조 방식의 간단하고 명확한 종료 조건"""
+        """개선된 종료 조건 - 주저앉기 방지"""
         
-        # 높이 체크
+        # 높이 체크 (더 엄격하게)
         body_height = self.data.qpos[2]
-        if body_height < 0.1:  # 10cm 아래로 떨어지면 종료
+        if body_height < 0.15:  # 15cm 아래로 떨어지면 종료 (더 엄격)
+            print(f"💀 종료: 높이 너무 낮음 ({body_height:.3f}m)")
             return True
         
         # 기울기 체크 (참조 방식)
@@ -284,20 +306,36 @@ class IntegratedGO2Env(gym.Env):
             body_quat[0]**2 - body_quat[1]**2 - body_quat[2]**2 + body_quat[3]**2
         ])
         
-        if z_axis[2] < 0.3:  # 너무 기울어지면 종료
+        if z_axis[2] < 0.5:  # 기울기 더 엄격하게 (0.3 → 0.5)
+            print(f"💀 종료: 너무 기울어짐 (z축: {z_axis[2]:.3f})")
             return True
+        
+        # 정지 상태 감지 (새로 추가)
+        if hasattr(self, 'current_step') and self.current_step > 50:  # 50스텝 후부터 체크
+            linear_vel = np.linalg.norm(self.data.qvel[:3])  # 선형 속도
+            if linear_vel < 0.05:  # 거의 정지 상태
+                print(f"💀 종료: 움직이지 않음 (속도: {linear_vel:.3f}m/s)")
+                return True
         
         # 측면 이탈
         if abs(self.data.qpos[1]) > 5.0:
+            print(f"💀 종료: 측면 이탈 (y: {self.data.qpos[1]:.3f})")
             return True
         
         # 후진 제한
         if self.data.qpos[0] < -2.0:
+            print(f"💀 종료: 너무 후진 (x: {self.data.qpos[0]:.3f})")
+            return True
+        
+        # 전진 성공 (목표 달성)
+        if self.data.qpos[0] > 10.0:
+            print(f"🎉 성공: 목표 달성! (x: {self.data.qpos[0]:.3f})")
             return True
         
         # 수치적 불안정성
         if (np.any(np.isnan(self.data.qpos)) or np.any(np.isinf(self.data.qpos)) or
             np.any(np.isnan(self.data.qvel)) or np.any(np.isinf(self.data.qvel))):
+            print("💀 종료: 수치적 불안정성")
             return True
         
         return False
@@ -319,6 +357,14 @@ class IntegratedGO2Env(gym.Env):
         # 위치 노이즈
         self.data.qpos[0] += np.random.normal(0, 0.01)  # x
         self.data.qpos[1] += np.random.normal(0, 0.01)  # y
+        
+        # 초기 모멘텀 추가 (정지 방지)
+        self.data.qvel[0] = np.random.uniform(0.1, 0.3)  # 전진 속도
+        self.data.qvel[1] = np.random.normal(0, 0.05)    # 측면 속도 약간
+        
+        # 관절 속도에도 약간의 초기 움직임
+        joint_vel_noise = np.random.normal(0, 0.1, 12)
+        self.data.qvel[6:6+12] = joint_vel_noise
         self.data.qpos[2] += np.random.normal(0, 0.005) # z
         
         # 방향 노이즈 (쿼터니언)
