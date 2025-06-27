@@ -9,6 +9,7 @@ import sys
 import numpy as np
 import torch
 import time
+import argparse
 from datetime import datetime
 
 # 프로젝트 경로 추가
@@ -28,15 +29,18 @@ class IntegratedTrainer:
                  total_timesteps=5_000_000,
                  eval_freq=10_000,
                  save_freq=50_000,
-                 log_freq=1000):
+                 log_freq=1000,
+                 render_training=False):
         
         self.total_timesteps = total_timesteps
         self.eval_freq = eval_freq
         self.save_freq = save_freq
         self.log_freq = log_freq
+        self.render_training = render_training
         
-        # 환경 생성
-        self.env = IntegratedGO2Env(render_mode=None)
+        # 환경 생성 (훈련 중 렌더링 여부에 따라)
+        render_mode = "human" if render_training else None
+        self.env = IntegratedGO2Env(render_mode=render_mode)
         
         # PPO 에이전트 생성 (참조 레포지터리 하이퍼파라미터 사용)
         self.agent = PPOAgent(
@@ -71,6 +75,7 @@ class IntegratedTrainer:
         print(f"액션 차원: {self.env.action_space.shape[0]}")
         print(f"저장 위치: {self.save_dir}")
         print(f"디바이스: {self.agent.device}")
+        print(f"훈련 중 렌더링: {'✅ 활성화' if self.render_training else '❌ 비활성화'}")
         
     def log_message(self, message):
         """로그 메시지 출력 및 파일 저장"""
@@ -125,6 +130,35 @@ class IntegratedTrainer:
             for step in range(rollout_length):
                 action, log_prob, value = self.agent.get_action(obs)
                 next_obs, reward, terminated, truncated, info = self.env.step(action)
+                
+                # 훈련 중 렌더링 (최적화됨)
+                if self.render_training:
+                    # 성능을 위해 매 스텝이 아닌 적절한 간격으로 렌더링
+                    should_render = (total_steps % 2 == 0)  # 2스텝마다 렌더링 (25 FPS 정도)
+                    
+                    if should_render:
+                        if total_steps % 100 == 0:  # 100스텝마다 상태 로그
+                            print(f"🎬 렌더링 중... (step {total_steps}, episode {episode_num})")
+                        
+                        try:
+                            render_result = self.env.render()
+                            
+                            # 초기 렌더링 상태 확인
+                            if total_steps < 10:
+                                print(f"  Step {total_steps}: 렌더링 = {render_result}")
+                                if render_result is None:
+                                    print(f"    뷰어 상태: {type(self.env.viewer)}")
+                                    
+                            # 렌더링 실패 시 뷰어 재초기화 시도 (한 번만)
+                            if render_result is None and not hasattr(self, '_viewer_reset_attempted'):
+                                print("🔧 뷰어 재초기화 시도...")
+                                self.env.viewer = None
+                                self._viewer_reset_attempted = True
+                                
+                        except Exception as e:
+                            if total_steps < 10:
+                                print(f"  ❌ Step {total_steps} 렌더링 실패: {e}")
+                            # 치명적이지 않은 렌더링 오류는 무시하고 계속 진행
                 
                 # 경험 저장
                 self.agent.store_transition(obs, action, reward, value, log_prob, terminated)
@@ -284,15 +318,48 @@ class IntegratedTrainer:
         return test_rewards, test_lengths
 
 
+def parse_args():
+    """명령줄 인수 파싱"""
+    parser = argparse.ArgumentParser(description="통합 GO2 환경 훈련 스크립트 (Generation Final)")
+    
+    # 훈련 관련 옵션
+    parser.add_argument("--total_timesteps", type=int, default=3_000_000,
+                        help="총 훈련 타임스텝 (기본값: 3,000,000)")
+    parser.add_argument("--eval_freq", type=int, default=25_000,
+                        help="평가 주기 (기본값: 25,000)")
+    parser.add_argument("--save_freq", type=int, default=100_000,
+                        help="모델 저장 주기 (기본값: 100,000)")
+    parser.add_argument("--log_freq", type=int, default=50,
+                        help="로그 출력 주기 (기본값: 50)")
+    
+    # 렌더링 및 테스트 옵션
+    parser.add_argument("--render", action="store_true",
+                        help="훈련 중 실시간 렌더링 활성화 (학습 과정 시각화)")
+    parser.add_argument("--render_steps", type=int, default=None,
+                        help="짧은 훈련으로 렌더링 테스트 (예: --render_steps 500)")
+    
+    return parser.parse_args()
+
+
 def main():
     """메인 함수"""
     
+    # 명령줄 인수 파싱
+    args = parse_args()
+    
+    # 렌더링 테스트를 위한 짧은 훈련 옵션
+    if args.render_steps:
+        args.total_timesteps = args.render_steps
+        args.render = True
+        print(f"🎯 짧은 렌더링 테스트 모드: {args.render_steps} 스텝")
+    
     # 훈련 시작
     trainer = IntegratedTrainer(
-        total_timesteps=3_000_000,  # 3M 스텝 (참조 방식보다 약간 적게)
-        eval_freq=25_000,
-        save_freq=100_000,
-        log_freq=50
+        total_timesteps=args.total_timesteps,
+        eval_freq=args.eval_freq,
+        save_freq=args.save_freq,
+        log_freq=args.log_freq,
+        render_training=args.render  # 훈련 중 렌더링 옵션 전달
     )
     
     try:
