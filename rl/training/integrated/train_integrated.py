@@ -9,6 +9,7 @@ import sys
 import numpy as np
 import torch
 import time
+import argparse
 from datetime import datetime
 
 # 프로젝트 경로 추가
@@ -282,26 +283,75 @@ class IntegratedTrainer:
         return test_rewards, test_lengths
 
 
+def parse_args():
+    """명령줄 인수 파싱"""
+    parser = argparse.ArgumentParser(description="통합 GO2 환경 훈련 스크립트")
+    
+    # 훈련 관련 옵션
+    parser.add_argument("--total_timesteps", type=int, default=3_000_000,
+                        help="총 훈련 타임스텝 (기본값: 3,000,000)")
+    parser.add_argument("--eval_freq", type=int, default=25_000,
+                        help="평가 주기 (기본값: 25,000)")
+    parser.add_argument("--save_freq", type=int, default=100_000,
+                        help="모델 저장 주기 (기본값: 100,000)")
+    parser.add_argument("--log_freq", type=int, default=50,
+                        help="로그 출력 주기 (기본값: 50)")
+    
+    # 렌더링 및 테스트 옵션
+    parser.add_argument("--render", action="store_true",
+                        help="훈련 후 테스트 시 렌더링 활성화")
+    parser.add_argument("--test_episodes", type=int, default=3,
+                        help="테스트 에피소드 수 (기본값: 3)")
+    parser.add_argument("--no_test", action="store_true",
+                        help="훈련 후 테스트 건너뛰기")
+    
+    # 모델 로드 관련
+    parser.add_argument("--load_model", type=str, default=None,
+                        help="기존 모델 경로에서 훈련 계속하기")
+    parser.add_argument("--test_only", action="store_true",
+                        help="훈련 없이 테스트만 실행")
+    
+    return parser.parse_args()
+
+
 def main():
     """메인 함수"""
     
+    # 명령줄 인수 파싱
+    args = parse_args()
+    
     # 훈련 시작
     trainer = IntegratedTrainer(
-        total_timesteps=3_000_000,  # 3M 스텝 (참조 방식보다 약간 적게)
-        eval_freq=25_000,
-        save_freq=100_000,
-        log_freq=50
+        total_timesteps=args.total_timesteps,
+        eval_freq=args.eval_freq,
+        save_freq=args.save_freq,
+        log_freq=args.log_freq
     )
     
     try:
-        # 훈련 실행
-        episode_rewards, episode_lengths = trainer.train()
-        
-        # 최고 모델로 테스트
-        best_model_path = os.path.join(trainer.save_dir, "best_model.pth")
-        if os.path.exists(best_model_path):
-            print("\n=== 최고 모델 테스트 ===")
-            trainer.test_trained_model(best_model_path, num_episodes=3, render=False)
+        # 테스트만 실행하는 경우
+        if args.test_only:
+            if args.load_model and os.path.exists(args.load_model):
+                print(f"\n=== 모델 테스트 모드 ===")
+                trainer.test_trained_model(args.load_model, num_episodes=args.test_episodes, render=args.render)
+            else:
+                print("테스트 모드에서는 --load_model 옵션이 필요합니다.")
+                return
+        else:
+            # 기존 모델 로드 (있는 경우)
+            if args.load_model and os.path.exists(args.load_model):
+                trainer.agent.load(args.load_model)
+                print(f"기존 모델 로드: {args.load_model}")
+            
+            # 훈련 실행
+            episode_rewards, episode_lengths = trainer.train()
+            
+            # 테스트 실행 (건너뛰기 옵션이 없는 경우)
+            if not args.no_test:
+                best_model_path = os.path.join(trainer.save_dir, "best_model.pth")
+                if os.path.exists(best_model_path):
+                    print("\n=== 최고 모델 테스트 ===")
+                    trainer.test_trained_model(best_model_path, num_episodes=args.test_episodes, render=args.render)
         
     except KeyboardInterrupt:
         print("\n훈련이 사용자에 의해 중단되었습니다.")

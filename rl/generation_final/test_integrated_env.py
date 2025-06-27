@@ -14,11 +14,13 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
 
 try:
-    from environments.integrated import IntegratedGO2Env
+    from integrated.integrated_go2_env import IntegratedGO2Env
+    # PPO 에이전트는 상위 디렉토리에서 import
+    sys.path.append(os.path.dirname(current_dir))
     from agents.ppo_agent import PPOAgent
 except ImportError as e:
     print(f"Import 오류: {e}")
-    print("rl 디렉토리에서 실행하세요.")
+    print("generation_final 디렉토리에서 실행하거나 경로를 확인하세요.")
     sys.exit(1)
 
 

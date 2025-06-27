@@ -13,9 +13,17 @@ class IntegratedGO2Env(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 50}
     
     def __init__(self, render_mode=None):
-        # XML 파일 설정
+        # Ubuntu 렌더링을 위한 환경 설정
         import os
         import tempfile
+        
+        # OpenGL 렌더링 설정 (Ubuntu 환경)
+        if render_mode == "human":
+            os.environ.setdefault('MUJOCO_GL', 'glfw')
+            # X11 디스플레이 확인
+            if 'DISPLAY' not in os.environ:
+                print("경고: DISPLAY 환경변수가 설정되지 않았습니다.")
+                print("Ubuntu에서는 'export DISPLAY=:0' 또는 X11 포워딩이 필요할 수 있습니다.")
         
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
         xml_template_path = os.path.join(base_dir, "assets", "go2_scene.xml")
@@ -375,21 +383,40 @@ class IntegratedGO2Env(gym.Env):
     def render(self):
         if self.render_mode == "human":
             if self.viewer is None:
-                import mujoco.viewer
-                self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
-                self.viewer.cam.distance = 3.0
-                self.viewer.cam.elevation = -20
-                self.viewer.cam.azimuth = 135
-                self.viewer.cam.lookat[0] = 0
-                self.viewer.cam.lookat[1] = 0
-                self.viewer.cam.lookat[2] = 0.3
+                try:
+                    import mujoco.viewer
+                    # Ubuntu 환경을 위한 개선된 뷰어 설정
+                    self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
+                    if self.viewer is not None:
+                        self.viewer.cam.distance = 3.0
+                        self.viewer.cam.elevation = -20
+                        self.viewer.cam.azimuth = 135
+                        self.viewer.cam.lookat[0] = 0
+                        self.viewer.cam.lookat[1] = 0
+                        self.viewer.cam.lookat[2] = 0.3
+                except Exception as e:
+                    print(f"MuJoCo viewer 초기화 실패: {e}")
+                    print("대안 렌더링 방법을 시도합니다...")
+                    try:
+                        # 대안: 동기 뷰어 사용
+                        self.viewer = mujoco.viewer.launch(self.model, self.data)
+                    except Exception as e2:
+                        print(f"동기 뷰어도 실패: {e2}")
+                        self.viewer = None
+                        return None
+            
+            if self.viewer is not None:
+                try:
+                    # 로봇 추적
+                    robot_x = self.data.qpos[0]
+                    robot_y = self.data.qpos[1] 
+                    self.viewer.cam.lookat[0] = robot_x
+                    self.viewer.cam.lookat[1] = robot_y
+                    self.viewer.sync()
+                except Exception as e:
+                    print(f"뷰어 업데이트 실패: {e}")
             else:
-                # 로봇 추적
-                robot_x = self.data.qpos[0]
-                robot_y = self.data.qpos[1] 
-                self.viewer.cam.lookat[0] = robot_x
-                self.viewer.cam.lookat[1] = robot_y
-            self.viewer.sync()
+                print("뷰어가 초기화되지 않았습니다.")
         elif self.render_mode == "rgb_array":
             if self.viewer is None:
                 self.viewer = mj.Renderer(self.model, width=1024, height=768)

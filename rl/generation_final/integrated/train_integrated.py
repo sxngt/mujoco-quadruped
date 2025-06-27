@@ -13,10 +13,12 @@ from datetime import datetime
 
 # 프로젝트 경로 추가
 current_dir = os.path.dirname(os.path.abspath(__file__))
-rl_dir = os.path.dirname(os.path.dirname(current_dir))
+generation_final_dir = os.path.dirname(current_dir)
+rl_dir = os.path.dirname(generation_final_dir)
+sys.path.append(generation_final_dir)
 sys.path.append(rl_dir)
 
-from environments.integrated import IntegratedGO2Env
+from integrated_go2_env import IntegratedGO2Env
 from agents.ppo_agent import PPOAgent
 import gymnasium as gym
 
