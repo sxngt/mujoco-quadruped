@@ -13,17 +13,38 @@ class IntegratedGO2Env(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 50}
     
     def __init__(self, render_mode=None):
-        # Ubuntu 렌더링을 위한 환경 설정
+        # 환경별 렌더링 설정
         import os
         import tempfile
+        import platform
         
-        # OpenGL 렌더링 설정 (Ubuntu 환경)
+        # 운영체제별 렌더링 설정
         if render_mode == "human":
-            os.environ.setdefault('MUJOCO_GL', 'glfw')
-            # X11 디스플레이 확인
-            if 'DISPLAY' not in os.environ:
-                print("경고: DISPLAY 환경변수가 설정되지 않았습니다.")
-                print("Ubuntu에서는 'export DISPLAY=:0' 또는 X11 포워딩이 필요할 수 있습니다.")
+            system = platform.system()
+            
+            if system == "Linux":  # Ubuntu 환경
+                # DISPLAY 환경변수 확인 및 설정
+                if 'DISPLAY' not in os.environ or not os.environ['DISPLAY']:
+                    print("⚠️  DISPLAY 환경변수가 설정되지 않았습니다.")
+                    print("다음 방법 중 하나를 시도하세요:")
+                    print("1. GUI 세션에서 실행: export DISPLAY=:0")
+                    print("2. SSH X11 포워딩: ssh -X username@server")
+                    print("3. Xvfb 가상 디스플레이: xvfb-run -a python script.py")
+                    print("4. 원격 데스크톱: VNC, XRDP 등")
+                    
+                    # 자동으로 :0 시도
+                    os.environ['DISPLAY'] = ':0'
+                    print(f"🔧 DISPLAY를 ':0'으로 자동 설정했습니다.")
+                
+                # OpenGL 설정
+                os.environ.setdefault('MUJOCO_GL', 'glfw')
+                os.environ.setdefault('LIBGL_ALWAYS_INDIRECT', '0')
+                
+            elif system == "Darwin":  # macOS 환경
+                print("ℹ️  macOS에서는 mjpython으로 실행하는 것이 권장됩니다.")
+                print("예: mjpython train_integrated.py --render")
+                
+            print(f"🖥️  렌더링 모드: {render_mode}, 시스템: {system}")
         
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
         xml_template_path = os.path.join(base_dir, "assets", "go2_scene.xml")
@@ -382,61 +403,105 @@ class IntegratedGO2Env(gym.Env):
     
     def render(self):
         if self.render_mode == "human":
-            if self.viewer is None:
+            return self._render_human()
+        elif self.render_mode == "rgb_array":
+            return self._render_rgb_array()
+        return None
+    
+    def _render_human(self):
+        """인간이 볼 수 있는 GUI 렌더링 (공식 문서 기준)"""
+        if self.viewer is None:
+            try:
+                import mujoco.viewer
+                # 공식 문서 권장: passive viewer 사용
+                self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
+                if self.viewer is not None:
+                    # 카메라 초기 설정
+                    self.viewer.cam.distance = 3.0
+                    self.viewer.cam.elevation = -20
+                    self.viewer.cam.azimuth = 135
+                    self.viewer.cam.lookat[:] = [0, 0, 0.3]
+                    print("✅ Passive viewer 초기화 성공")
+                else:
+                    raise RuntimeError("Passive viewer 생성 실패")
+            except Exception as e:
+                print(f"❌ Passive viewer 실패: {e}")
                 try:
-                    import mujoco.viewer
-                    # Ubuntu 환경을 위한 개선된 뷰어 설정
-                    self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
-                    if self.viewer is not None:
-                        self.viewer.cam.distance = 3.0
-                        self.viewer.cam.elevation = -20
-                        self.viewer.cam.azimuth = 135
-                        self.viewer.cam.lookat[0] = 0
-                        self.viewer.cam.lookat[1] = 0
-                        self.viewer.cam.lookat[2] = 0.3
-                except Exception as e:
-                    print(f"MuJoCo viewer 초기화 실패: {e}")
-                    print("대안 렌더링 방법을 시도합니다...")
-                    try:
-                        # 대안: 동기 뷰어 사용
-                        self.viewer = mujoco.viewer.launch(self.model, self.data)
-                    except Exception as e2:
-                        print(f"동기 뷰어도 실패: {e2}")
-                        self.viewer = None
-                        return None
-            
-            if self.viewer is not None:
-                try:
-                    # 로봇 추적
+                    # 대안: blocking viewer (비권장이지만 동작함)
+                    print("🔄 Blocking viewer 시도...")
+                    self.viewer = mujoco.viewer.launch(self.model, self.data)
+                    print("✅ Blocking viewer 초기화 성공")
+                except Exception as e2:
+                    print(f"❌ Blocking viewer도 실패: {e2}")
+                    self.viewer = None
+                    return None
+        
+        if self.viewer is not None:
+            try:
+                # 뷰어 상태 확인 (passive viewer의 경우)
+                if hasattr(self.viewer, 'is_running') and not self.viewer.is_running():
+                    print("뷰어 창이 닫혔습니다.")
+                    self.viewer = None
+                    return None
+                
+                # 로봇 추적 카메라
+                if len(self.data.qpos) >= 2:
                     robot_x = self.data.qpos[0]
-                    robot_y = self.data.qpos[1] 
+                    robot_y = self.data.qpos[1]
                     self.viewer.cam.lookat[0] = robot_x
                     self.viewer.cam.lookat[1] = robot_y
-                    self.viewer.sync()
-                except Exception as e:
-                    print(f"뷰어 업데이트 실패: {e}")
-            else:
-                print("뷰어가 초기화되지 않았습니다.")
-        elif self.render_mode == "rgb_array":
-            if self.viewer is None:
-                self.viewer = mj.Renderer(self.model, width=1024, height=768)
-            self.viewer.update_scene(self.data)
-            return self.viewer.render()
+                
+                # 공식 문서 권장: sync로 데이터 동기화
+                self.viewer.sync()
+                return True
+                
+            except Exception as e:
+                print(f"❌ 뷰어 업데이트 실패: {e}")
+                return None
         
         return None
     
+    def _render_rgb_array(self):
+        """RGB 배열 렌더링 (헤드리스 환경용, 공식 문서 기준)"""
+        if self.viewer is None:
+            # 공식 문서 기준: (model, height, width) 순서
+            self.viewer = mj.Renderer(self.model, height=768, width=1024)
+        
+        try:
+            # 씬 업데이트 후 렌더링
+            self.viewer.update_scene(self.data)
+            rgb_array = self.viewer.render()
+            
+            # 공식 문서: RGB 배열은 (height, width, 3) 형태
+            if rgb_array.shape[-1] != 3:
+                raise RuntimeError(f"잘못된 RGB 배열 형태: {rgb_array.shape}")
+            
+            return rgb_array
+            
+        except Exception as e:
+            print(f"❌ RGB 렌더링 실패: {e}")
+            return None
+    
     def close(self):
+        """리소스 정리 (공식 문서 기준)"""
         if self.viewer is not None:
             try:
-                self.viewer.close()
-            except:
-                pass
-            self.viewer = None
+                if hasattr(self.viewer, 'close'):
+                    self.viewer.close()
+                    print("✅ 뷰어 정상 종료")
+                elif hasattr(self.viewer, 'is_running'):
+                    # passive viewer의 경우 자동으로 정리됨
+                    print("ℹ️  Passive viewer 자동 정리")
+            except Exception as e:
+                print(f"⚠️  뷰어 종료 중 오류: {e}")
+            finally:
+                self.viewer = None
         
-        # 임시 파일 정리
-        if hasattr(self, 'model_path') and self.model_path.startswith('/tmp'):
-            try:
-                import os
+        # 임시 XML 파일 정리
+        try:
+            import os
+            if hasattr(self, 'model_path') and os.path.exists(self.model_path):
                 os.unlink(self.model_path)
-            except:
-                pass
+                print("✅ 임시 XML 파일 정리 완료")
+        except Exception as e:
+            print(f"⚠️  임시 파일 정리 실패: {e}")
