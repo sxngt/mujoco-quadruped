@@ -125,25 +125,25 @@ class ImprovedGO2Env(gym.Env):
         
         # 연구 기반 보상 함수 가중치 (점프 방지 및 보행 강화)
         self.reward_weights = {
-            # === 핵심 목표 (전진) ===
-            'forward_velocity': 25.0,    # 전진 보상 (점프 방지를 위해 감소)
-            'target_velocity': 15.0,     # 목표 속도 추적 보상
+            # === 핵심 목표 (전진이 최우선!) ===
+            'forward_velocity': 50.0,    # 전진 보상 대폭 강화!
+            'target_velocity': 20.0,     # 목표 속도 추적 보상
             
-            # === 보행 품질 (지상 접촉 강조) ===
-            'gait_pattern': 30.0,        # 보행 패턴 중요도 대폭 증가
-            'ground_contact': 1.0,       # 지상 접촉 유지 보상 (새로 추가)
-            'energy_efficiency': 5.0,    # 에너지 효율적 보행
+            # === 보행 품질 (전진을 보조하는 수준) ===
+            'gait_pattern': 5.0,         # 보행 패턴 (부차적)
+            'ground_contact': 0.5,       # 지상 접촉 (부차적)
+            'energy_efficiency': 1.0,    # 에너지 효율 (부차적)
             
-            # === 자세 안정성 ===
-            'height_tracking': 20.0,     # 높이 유지 중요도 증가
-            'orientation': 15.0,         # 자세 유지 중요도 증가
+            # === 자세 안정성 (최소한만) ===
+            'height_tracking': 2.0,      # 높이 유지 (대폭 감소)
+            'orientation': 2.0,          # 자세 유지 (대폭 감소)
             
             # === 방향 제어 ===
-            'direction_control': 10.0,   # 직진 보상 증가
+            'direction_control': 15.0,   # 직진 보상 (유지)
             
-            # === 안전성 및 부드러움 ===
-            'action_smoothness': 0.5,    # 부드러운 움직임 증가
-            'joint_safety': -20.0,       # 관절 안전성 페널티 강화
+            # === 안전성 및 부드러움 (최소화) ===
+            'action_smoothness': 0.1,    # 부드러운 움직임 (최소)
+            'joint_safety': -5.0,        # 관절 안전성 (완화)
             'vertical_control': 3.0,     # 수직 움직임 제어 강화
             'stability': 10.0,           # 전반적 안정성 대폭 증가
         }
@@ -446,11 +446,23 @@ class ImprovedGO2Env(gym.Env):
         # === 1. 핵심 목표: 전진 보상 (가장 중요) ===
         forward_vel = np.clip(self.data.qvel[0], -5.0, 5.0)
         
-        # 1-1. 기본 전진 보상 (속도에 비례)
+        # 1-1. 기본 전진 보상 (속도에 비례) - 공격적 보상
         if forward_vel > 0:
             rewards['forward_velocity'] = forward_vel * self.reward_weights['forward_velocity']
+            # 빠를수록 추가 보너스
+            if forward_vel > 0.5:
+                rewards['forward_velocity'] += (forward_vel - 0.5) * 30.0
+            if forward_vel > 1.0:
+                rewards['forward_velocity'] += (forward_vel - 1.0) * 50.0
         else:
-            rewards['forward_velocity'] = forward_vel * self.reward_weights['forward_velocity'] * 2  # 후진 페널티 강화
+            rewards['forward_velocity'] = forward_vel * self.reward_weights['forward_velocity'] * 3  # 후진 페널티 더 강화
+        
+        # 1-1.5. 정지 페널티 (움직이지 않으면 큰 페널티!)
+        total_vel = np.linalg.norm(self.data.qvel[:3])
+        if total_vel < 0.05:  # 거의 정지 상태
+            rewards['static_penalty'] = -30.0  # 매우 강한 페널티
+        else:
+            rewards['static_penalty'] = 0.0
         
         # 1-2. 목표 속도 추적 보상 (0.8 m/s 목표)
         vel_error = abs(forward_vel - self.target_forward_velocity)
