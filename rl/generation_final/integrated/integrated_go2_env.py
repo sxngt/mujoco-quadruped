@@ -53,10 +53,9 @@ class IntegratedGO2Env(gym.Env):
             shape=(self.n_actions,), dtype=np.float32
         )
         
-        # 참조 방식: 간결한 39차원 관찰 공간
-        # [joint_pos(12) + joint_vel(12) + body_quat(4) + body_angvel(3) + body_linvel(3) + prev_action(12)] = 46차원
-        # GO2 특화로 3차원 추가하여 39차원으로 맞춤
-        obs_dim = 39
+        # 참조 레포지터리와 동일한 45차원 관찰 공간
+        # [lin_vel(3) + ang_vel(3) + gravity(3) + commands(2) + joint_pos(12) + joint_vel(12) + prev_actions(10)] = 45차원
+        obs_dim = 45
         self.observation_space = spaces.Box(
             low=np.full(obs_dim, -np.inf, dtype=np.float32),
             high=np.full(obs_dim, np.inf, dtype=np.float32),
@@ -75,6 +74,7 @@ class IntegratedGO2Env(gym.Env):
         
         # 상태 변수
         self.current_step = 0
+        self.max_episode_steps = 1000  # 최대 에피소드 길이
         self.current_action = np.zeros(self.n_actions)
         self.prev_action = np.zeros(self.n_actions)
         
@@ -130,7 +130,7 @@ class IntegratedGO2Env(gym.Env):
         joint_vel *= self.obs_scales['dof_vel']
         prev_actions *= self.obs_scales['actions']
         
-        # 관찰 벡터 구성 (39차원)
+        # 관찰 벡터 구성 (45차원)
         obs = np.concatenate([
             body_linvel,        # 3
             body_angvel,        # 3  
@@ -138,7 +138,7 @@ class IntegratedGO2Env(gym.Env):
             commands,           # 2
             joint_pos,          # 12
             joint_vel,          # 12
-            prev_actions[:4]    # 4 (39차원 맞추기 위해 일부만)
+            prev_actions[:10]   # 10 (45차원 맞추기 위해 10개만)
         ])
         
         # 클리핑 (참조 방식)
@@ -289,56 +289,41 @@ class IntegratedGO2Env(gym.Env):
             'total': total_reward
         }
     
+    @property
+    def is_healthy(self):
+        """참조 레포지터리와 동일한 건강 상태 체크"""
+        # 모든 상태값이 유한한지 확인
+        state = self._get_observation()
+        if not np.all(np.isfinite(state)):
+            return False
+        
+        # Z 위치 체크 (참조: 0.22-0.65)
+        z_pos = self.data.qpos[2]
+        if not (0.22 <= z_pos <= 0.65):
+            return False
+        
+        # Roll, Pitch 각도 체크 (±10도)
+        quat = self.data.qpos[3:7]
+        # 쿼터니언을 오일러 각도로 변환
+        w, x, y, z = quat
+        roll = np.arctan2(2*(w*x + y*z), 1 - 2*(x*x + y*y))
+        pitch = np.arcsin(2*(w*y - z*x))
+        
+        max_angle = np.radians(10)  # 10도를 라디안으로
+        if abs(roll) > max_angle or abs(pitch) > max_angle:
+            return False
+        
+        # 정지 상태 체크 (50스텝 후)
+        if self.current_step > 50:
+            total_vel = np.linalg.norm(self.data.qvel[:3])
+            if total_vel < 0.1:
+                return False
+        
+        return True
+    
     def _is_terminated(self):
-        """개선된 종료 조건 - 주저앉기 방지"""
-        
-        # 높이 체크 (더 엄격하게)
-        body_height = self.data.qpos[2]
-        if body_height < 0.15:  # 15cm 아래로 떨어지면 종료 (더 엄격)
-            print(f"💀 종료: 높이 너무 낮음 ({body_height:.3f}m)")
-            return True
-        
-        # 기울기 체크 (참조 방식)
-        body_quat = self.data.qpos[3:7]
-        z_axis = np.array([
-            2*(body_quat[1]*body_quat[3] + body_quat[0]*body_quat[2]),
-            2*(body_quat[2]*body_quat[3] - body_quat[0]*body_quat[1]),
-            body_quat[0]**2 - body_quat[1]**2 - body_quat[2]**2 + body_quat[3]**2
-        ])
-        
-        if z_axis[2] < 0.5:  # 기울기 더 엄격하게 (0.3 → 0.5)
-            print(f"💀 종료: 너무 기울어짐 (z축: {z_axis[2]:.3f})")
-            return True
-        
-        # 정지 상태 감지 (새로 추가)
-        if hasattr(self, 'current_step') and self.current_step > 50:  # 50스텝 후부터 체크
-            linear_vel = np.linalg.norm(self.data.qvel[:3])  # 선형 속도
-            if linear_vel < 0.05:  # 거의 정지 상태
-                print(f"💀 종료: 움직이지 않음 (속도: {linear_vel:.3f}m/s)")
-                return True
-        
-        # 측면 이탈
-        if abs(self.data.qpos[1]) > 5.0:
-            print(f"💀 종료: 측면 이탈 (y: {self.data.qpos[1]:.3f})")
-            return True
-        
-        # 후진 제한
-        if self.data.qpos[0] < -2.0:
-            print(f"💀 종료: 너무 후진 (x: {self.data.qpos[0]:.3f})")
-            return True
-        
-        # 전진 성공 (목표 달성)
-        if self.data.qpos[0] > 10.0:
-            print(f"🎉 성공: 목표 달성! (x: {self.data.qpos[0]:.3f})")
-            return True
-        
-        # 수치적 불안정성
-        if (np.any(np.isnan(self.data.qpos)) or np.any(np.isinf(self.data.qpos)) or
-            np.any(np.isnan(self.data.qvel)) or np.any(np.isinf(self.data.qvel))):
-            print("💀 종료: 수치적 불안정성")
-            return True
-        
-        return False
+        """참조 레포지터리 방식의 종료 조건"""
+        return not self.is_healthy
     
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -409,7 +394,9 @@ class IntegratedGO2Env(gym.Env):
         observation = self._get_observation()
         reward, reward_info = self._compute_reward()
         terminated = self._is_terminated()
-        truncated = False
+        
+        # 에피소드 길이 제한 (truncated 조건)
+        truncated = self.current_step >= self.max_episode_steps
         
         self.current_step += 1
         self.prev_action = self.current_action.copy()
