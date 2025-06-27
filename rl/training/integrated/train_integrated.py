@@ -73,7 +73,7 @@ class IntegratedTrainer:
         print(f"액션 차원: {self.env.action_space.shape[0]}")
         print(f"저장 위치: {self.save_dir}")
         print(f"디바이스: {self.agent.device}")
-        print(f"훈련 중 렌더링: {'✅ 활성화' if render_training else '❌ 비활성화'}")
+        print(f"훈련 중 렌더링: {'✅ 활성화' if self.render_training else '❌ 비활성화'}")
         
     def log_message(self, message):
         """로그 메시지 출력 및 파일 저장"""
@@ -131,8 +131,23 @@ class IntegratedTrainer:
                 
                 # 훈련 중 렌더링 (매 스텝마다)
                 if self.render_training:
-                    self.env.render()
-                    time.sleep(0.01)  # 너무 빠르지 않게 조절
+                    if total_steps % 50 == 0:  # 50스텝마다 렌더링 상태 로그
+                        print(f"🎬 렌더링 중... (step {total_steps}, episode {episode_num})")
+                    
+                    try:
+                        render_result = self.env.render()
+                        if total_steps < 5:  # 처음 5스텝은 렌더링 결과 로그
+                            print(f"  Step {total_steps}: 렌더링 결과 = {render_result}")
+                            
+                        # macOS에서는 추가 처리가 필요할 수 있음
+                        if render_result is None and total_steps < 5:
+                            print(f"  ⚠️ 렌더링 결과가 None입니다. 뷰어 상태: {self.env.viewer}")
+                            
+                    except Exception as e:
+                        if total_steps < 5:
+                            print(f"  ❌ 렌더링 실패: {e}")
+                    
+                    time.sleep(0.03)  # 약 30 FPS로 조절
                 
                 # 경험 저장
                 self.agent.store_transition(obs, action, reward, value, log_prob, terminated)
