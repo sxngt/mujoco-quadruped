@@ -67,7 +67,7 @@ class GO2MujocoEnv(MujocoEnv):
             "render_fps": 60,
         }
         self._last_render_time = -1.0
-        self._max_episode_time_sec = 15.0
+        self._max_episode_time_sec = 30.0  # 30초로 증가
         self._step = 0
 
         # 보상/페널티 가중치 (참조 레포지터리와 동일)
@@ -114,10 +114,10 @@ class GO2MujocoEnv(MujocoEnv):
         }
         self._tracking_velocity_sigma = 0.25
 
-        # 건강 상태 범위 (참조와 동일)
-        self._healthy_z_range = (0.22, 0.65)
-        self._healthy_pitch_range = (-np.deg2rad(10), np.deg2rad(10))
-        self._healthy_roll_range = (-np.deg2rad(10), np.deg2rad(10))
+        # 건강 상태 범위 (GO2에 맞게 조정)
+        self._healthy_z_range = (0.15, 0.45)  # GO2가 더 낮음
+        self._healthy_pitch_range = (-np.deg2rad(30), np.deg2rad(30))  # 더 관대하게
+        self._healthy_roll_range = (-np.deg2rad(30), np.deg2rad(30))  # 더 관대하게
 
         # 발 관련 추적
         self._feet_air_time = np.zeros(4)
@@ -186,10 +186,20 @@ class GO2MujocoEnv(MujocoEnv):
         reward, reward_info = self._calc_reward(action)
         terminated = not self.is_healthy
         truncated = self._step >= (self._max_episode_time_sec / self.dt)
+        
+        # 디버그 정보
+        if terminated and self._step < 100:  # 100스텝 이내 종료 시 출력
+            z_pos = self.data.qpos[2]
+            quat = self.data.qpos[3:7]
+            roll, pitch, yaw = self.euler_from_quaternion(*quat)
+            print(f"⚠️ 조기 종료: step={self._step}, z={z_pos:.3f}m, roll={np.degrees(roll):.1f}°, pitch={np.degrees(pitch):.1f}°")
+        
         info = {
             "x_position": self.data.qpos[0],
             "y_position": self.data.qpos[1],
             "distance_from_origin": np.linalg.norm(self.data.qpos[0:2], ord=2),
+            "episode_length": self._step,
+            "z_position": self.data.qpos[2],
             **reward_info,
         }
 
@@ -209,11 +219,15 @@ class GO2MujocoEnv(MujocoEnv):
         min_z, max_z = self._healthy_z_range
         is_healthy = np.isfinite(state).all() and min_z <= state[2] <= max_z
 
+        # 오일러 각도로 변환하여 체크
+        quat = self.data.qpos[3:7]
+        roll, pitch, yaw = self.euler_from_quaternion(*quat)
+        
         min_roll, max_roll = self._healthy_roll_range
-        is_healthy = is_healthy and min_roll <= state[4] <= max_roll
+        is_healthy = is_healthy and min_roll <= roll <= max_roll
 
         min_pitch, max_pitch = self._healthy_pitch_range
-        is_healthy = is_healthy and min_pitch <= state[5] <= max_pitch
+        is_healthy = is_healthy and min_pitch <= pitch <= max_pitch
 
         return is_healthy
 
