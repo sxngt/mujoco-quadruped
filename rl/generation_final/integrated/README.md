@@ -4,16 +4,32 @@ MujocoEnv 기반 Unitree GO2 사족보행 로봇의 강화학습 환경입니다
 
 ## 설치 방법
 
+### 방법 1: uv 사용 (권장)
 ```bash
 # 프로젝트 루트에서
+cd ~/robotics/mujoco-quadruped
 uv sync
 
-# TensorBoard 오류 발생 시
+# 패키지가 제대로 설치되지 않으면
 cd rl/generation_final/integrated
 ./install_deps.sh
+```
 
-# 또는 직접 설치
-uv pip install tensorboard tqdm
+### 방법 2: pip 사용
+```bash
+cd ~/robotics/mujoco-quadruped/rl/generation_final/integrated
+pip install -r requirements.txt
+```
+
+### 방법 3: 수동 설치
+```bash
+# 가상환경 활성화 후
+pip install gymnasium[mujoco] stable-baselines3[extra] tensorboard tqdm mujoco torch numpy matplotlib
+```
+
+### 설치 확인
+```bash
+python check_deps.py
 ```
 
 ## 필수 패키지

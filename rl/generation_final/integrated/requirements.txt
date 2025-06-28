@@ -1,0 +1,24 @@
+# GO2 Generation Final 의존성
+# pip install -r requirements.txt
+
+# 환경 프레임워크
+gymnasium[mujoco]>=1.1.1
+
+# 강화학습
+stable-baselines3[extra]>=2.6.0
+tensorboard>=2.15.0
+
+# 물리 시뮬레이션
+mujoco>=3.3.3
+
+# 딥러닝
+torch>=2.7.1
+numpy>=2.3.0
+
+# 유틸리티
+tqdm>=4.66.0
+matplotlib>=3.10.3
+cloudpickle>=3.1.1
+
+# 선택사항
+# wandb>=0.20.1  # 실험 추적용
