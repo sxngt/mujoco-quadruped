@@ -13,7 +13,6 @@ DEFAULT_CAMERA_CONFIG = {
     "distance": 3.0,
     "elevation": -25.0,
     "lookat": np.array([0., 0., 0.]),
-    "fixedcamid": 0,
     "trackbodyid": -1,
     "type": 2,
 }
@@ -55,7 +54,6 @@ class GO2MujocoEnv(MujocoEnv):
             model_path=model_path,
             frame_skip=10,  # 핵심! 참조와 동일한 프레임 스킵
             observation_space=None,  # 나중에 수동 설정
-            default_camera_config=DEFAULT_CAMERA_CONFIG,
             **kwargs,
         )
 

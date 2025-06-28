@@ -28,13 +28,27 @@ LOG_DIR = "logs_sb3"
 
 def train(args):
     """훈련 함수 - 참조 레포지터리와 동일"""
-    vec_env = make_vec_env(
-        GO2MujocoEnv,
-        env_kwargs={"ctrl_type": args.ctrl_type},
-        n_envs=args.num_parallel_envs,
-        seed=args.seed,
-        vec_env_cls=SubprocVecEnv,
-    )
+    # 렌더링을 위한 환경 설정
+    env_kwargs = {"ctrl_type": args.ctrl_type}
+    
+    if args.render_training:
+        # 렌더링 모드에서는 단일 환경 사용 (병렬 렌더링 불가)
+        env_kwargs["render_mode"] = "human"
+        vec_env = make_vec_env(
+            GO2MujocoEnv,
+            env_kwargs=env_kwargs,
+            n_envs=1,  # 렌더링 시 단일 환경
+            seed=args.seed,
+        )
+        print("⚠️  렌더링 모드: 단일 환경으로 자동 전환")
+    else:
+        vec_env = make_vec_env(
+            GO2MujocoEnv,
+            env_kwargs=env_kwargs,
+            n_envs=args.num_parallel_envs,
+            seed=args.seed,
+            vec_env_cls=SubprocVecEnv,
+        )
 
     train_time = time.strftime("%Y-%m-%d_%H-%M-%S")
     if args.run_name is None:
@@ -68,6 +82,10 @@ def train(args):
 
     print(f"📊 총 타임스텝: {args.total_timesteps:,}")
     print(f"🔄 평가 주기: {args.eval_frequency:,}")
+    print(f"🎬 훈련 중 렌더링: {'✅ 활성화' if args.render_training else '❌ 비활성화'}")
+    
+    if args.render_training:
+        print("⚠️  렌더링 모드에서는 훈련 속도가 느려질 수 있습니다")
     
     model.learn(
         total_timesteps=args.total_timesteps,
@@ -191,6 +209,11 @@ if __name__ == "__main__":
         choices=["torque", "position"],
         default="torque",
         help="제어 타입",
+    )
+    parser.add_argument(
+        "--render_training",
+        action="store_true",
+        help="훈련 중 실시간 렌더링 활성화 (속도 저하 있음)",
     )
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
