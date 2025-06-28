@@ -70,12 +70,13 @@ class GO2MujocoEnv(MujocoEnv):
         self._max_episode_time_sec = 30.0  # 30초로 증가
         self._step = 0
 
-        # 보상/페널티 가중치 (참조 레포지터리와 동일)
+        # 보상/페널티 가중치 (GO2 센서 충돌 방지용 조정)
         self.reward_weights = {
             "linear_vel_tracking": 2.0,
             "angular_vel_tracking": 1.0,
             "healthy": 0.0,
             "feet_airtime": 1.0,
+            "head_clearance": 2.0,  # 머리 높이 유지 보상 추가
         }
         self.cost_weights = {
             "torque": 0.0002,
@@ -85,8 +86,8 @@ class GO2MujocoEnv(MujocoEnv):
             "joint_limit": 10.0,
             "joint_velocity": 0.01,
             "joint_acceleration": 2.5e-7,
-            "orientation": 1.0,
-            "collision": 1.0,
+            "orientation": 2.0,     # 자세 유지 강화
+            "collision": 5.0,       # 충돌 페널티 강화 (GO2 센서 보호)
             "default_joint_position": 0.1
         }
 
@@ -135,6 +136,7 @@ class GO2MujocoEnv(MujocoEnv):
                 self._cfrc_ext_feet_indices.append(body_id)
             except:
                 pass
+        
         
         # 관절 범위 설정 (참조 방식)
         dof_position_limit_multiplier = 0.9
@@ -288,6 +290,21 @@ class GO2MujocoEnv(MujocoEnv):
     def healthy_reward(self):
         return self.is_healthy
 
+    @property
+    def head_clearance_reward(self):
+        """머리 부분이 충분히 높이 있을 때 보상"""
+        # base의 높이와 pitch 각도를 고려
+        base_height = self.data.qpos[2]
+        quat = self.data.qpos[3:7]
+        roll, pitch, yaw = self.euler_from_quaternion(*quat)
+        
+        # 머리가 위를 향하고 충분한 높이에 있을 때 보상
+        # pitch가 음수면 머리가 아래로 향함 (위험)
+        head_up_reward = max(0, pitch + 0.1)  # 약간의 상향 자세 유도
+        height_reward = max(0, base_height - 0.2)  # 최소 높이 20cm 유지
+        
+        return head_up_reward * 10.0 + height_reward * 5.0
+
     ######### 음의 보상 함수들 #########
     @property
     def non_flat_base_cost(self):
@@ -295,13 +312,32 @@ class GO2MujocoEnv(MujocoEnv):
 
     @property
     def collision_cost(self):
-        if len(self._cfrc_ext_contact_indices) > 0:
-            return np.sum(
-                1.0
-                * (np.linalg.norm(self.data.cfrc_ext[self._cfrc_ext_contact_indices]) > 0.1)
-            )
-        else:
-            return 0.0
+        """GO2 센서 충돌 방지를 위한 정교한 충돌 페널티"""
+        collision_cost = 0.0
+        
+        # 모든 접촉을 확인
+        for i in range(self.data.ncon):
+            contact = self.data.contact[i]
+            
+            # 접촉한 geom들 확인
+            geom1_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom1)
+            geom2_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom2)
+            
+            # 발 접촉은 허용 (정상적인 보행)
+            foot_geoms = ['FL_foot', 'FR_foot', 'RL_foot', 'RR_foot']
+            is_foot_contact = (geom1_name in foot_geoms or geom2_name in foot_geoms)
+            
+            if not is_foot_contact:
+                # 접촉 위치가 앞쪽 센서 부분인지 확인
+                contact_pos = contact.pos
+                
+                # GO2 base 좌표계에서 앞쪽 센서 영역 (x > 0.2)
+                if contact_pos[0] > 0.2:  # 앞쪽 센서 부분
+                    collision_cost += 10.0  # 센서 충돌에 큰 페널티
+                else:
+                    collision_cost += 3.0   # 일반 몸체 충돌
+        
+        return collision_cost
 
     @property
     def joint_limit_cost(self):
@@ -351,11 +387,15 @@ class GO2MujocoEnv(MujocoEnv):
         feet_air_time_reward = (
             self.feet_air_time_reward * self.reward_weights["feet_airtime"]
         )
+        head_clearance_reward = (
+            self.head_clearance_reward * self.reward_weights["head_clearance"]
+        )
         rewards = (
             linear_vel_tracking_reward
             + angular_vel_tracking_reward
             + healthy_reward
             + feet_air_time_reward
+            + head_clearance_reward
         )
 
         # 음의 비용
@@ -396,6 +436,8 @@ class GO2MujocoEnv(MujocoEnv):
         reward = max(0.0, rewards - costs)  # 참조와 동일하게 0 이하 클리핑
         reward_info = {
             "linear_vel_tracking_reward": linear_vel_tracking_reward,
+            "head_clearance_reward": head_clearance_reward,
+            "collision_cost": -collision_cost,
             "reward_ctrl": -ctrl_cost,
             "reward_survive": healthy_reward,
         }
