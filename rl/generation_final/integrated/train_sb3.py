@@ -80,7 +80,9 @@ def train(args):
         # 기본 PPO 설정 (참조 레포지터리와 동일)
         # CPU 사용 권장 (MLP 정책은 GPU 효율이 낮음)
         device = "cpu" if not args.force_gpu else "auto"
-        model = PPO("MlpPolicy", vec_env, verbose=1, tensorboard_log=LOG_DIR, device=device)
+        # TensorBoard 로깅 비활성화 옵션
+        tb_log = LOG_DIR if not args.no_tensorboard else None
+        model = PPO("MlpPolicy", vec_env, verbose=1, tensorboard_log=tb_log, device=device)
 
     print(f"📊 총 타임스텝: {args.total_timesteps:,}")
     print(f"🔄 평가 주기: {args.eval_frequency:,}")
@@ -221,6 +223,11 @@ if __name__ == "__main__":
         "--force_gpu",
         action="store_true",
         help="GPU 강제 사용 (MLP 정책에서는 비권장)",
+    )
+    parser.add_argument(
+        "--no_tensorboard",
+        action="store_true",
+        help="TensorBoard 로깅 비활성화",
     )
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()

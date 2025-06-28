@@ -8,8 +8,12 @@ MujocoEnv 기반 Unitree GO2 사족보행 로봇의 강화학습 환경입니다
 # 프로젝트 루트에서
 uv sync
 
-# 또는 pip 사용 시
-pip install -r requirements.txt
+# TensorBoard 오류 발생 시
+cd rl/generation_final/integrated
+./install_deps.sh
+
+# 또는 직접 설치
+uv pip install tensorboard tqdm
 ```
 
 ## 필수 패키지
@@ -69,6 +73,8 @@ uv run python train_sb3.py --run test \
 - `--eval_frequency`: 평가 주기 (기본: 10,000)
 - `--render_training`: 훈련 중 실시간 렌더링
 - `--ctrl_type`: 제어 타입 (torque/position)
+- `--no_tensorboard`: TensorBoard 로깅 비활성화
+- `--force_gpu`: GPU 강제 사용 (비권장)
 
 ## 보상 함수
 
@@ -108,6 +114,18 @@ integrated/
 ```bash
 # 프로젝트 루트에서
 uv sync
+```
+
+### "tensorboard is not installed" 오류
+```bash
+# 방법 1: 설치 스크립트 사용
+./install_deps.sh
+
+# 방법 2: 직접 설치
+uv pip install tensorboard
+
+# 방법 3: TensorBoard 없이 실행
+uv run python train_sb3.py --run train --no_tensorboard
 ```
 
 ### 렌더링 오류
